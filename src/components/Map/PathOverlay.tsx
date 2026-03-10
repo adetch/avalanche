@@ -2,14 +2,14 @@
 
 import { Source, Layer } from "react-map-gl/maplibre";
 import { useAvalancheStore } from "@/store/useAvalancheStore";
-import type { Feature, Polygon, LineString } from "geojson";
+import type { Feature, Polygon, LineString, FeatureCollection } from "geojson";
 
 export default function PathOverlay() {
   const result = useAvalancheStore((s) => s.result);
 
   if (!result) return null;
 
-  const { path } = result;
+  const { path, allPaths } = result;
 
   const trackData: Feature<Polygon> = {
     type: "Feature",
@@ -23,7 +23,7 @@ export default function PathOverlay() {
     geometry: path.runoutZone,
   };
 
-  // Fall-line from crown to runout (truncate at runout distance)
+  // Primary fall-line from crown to runout (truncate at runout distance)
   const runoutDist = path.runoutPoint.distanceFromCrown;
   const fallLineCoords = path.profile
     .filter((p) => p.distanceFromCrown <= runoutDist)
@@ -36,6 +36,27 @@ export default function PathOverlay() {
       type: "LineString",
       coordinates: fallLineCoords,
     },
+  };
+
+  // Secondary paths from ensemble (all paths except primary)
+  const secondaryLines: FeatureCollection<LineString> = {
+    type: "FeatureCollection",
+    features: allPaths
+      .filter((p) => p !== allPaths[0]) // skip primary (already rendered as white dashed)
+      .map((p) => {
+        const coords = p.profile
+          .filter((pt) => pt.distanceFromCrown <= p.horizontalRunout)
+          .map((pt) => pt.lngLat);
+        coords.push(p.runoutPoint.lngLat);
+        return {
+          type: "Feature" as const,
+          properties: {},
+          geometry: {
+            type: "LineString" as const,
+            coordinates: coords,
+          },
+        };
+      }),
   };
 
   // Key points: crown, beta, runout
@@ -103,7 +124,23 @@ export default function PathOverlay() {
         />
       </Source>
 
-      {/* Fall-line */}
+      {/* Secondary ensemble paths */}
+      {secondaryLines.features.length > 0 && (
+        <Source id="secondary-paths" type="geojson" data={secondaryLines}>
+          <Layer
+            id="secondary-paths-layer"
+            type="line"
+            paint={{
+              "line-color": "#f97316",
+              "line-width": 1.5,
+              "line-opacity": 0.4,
+              "line-dasharray": [2, 2],
+            }}
+          />
+        </Source>
+      )}
+
+      {/* Primary fall-line */}
       <Source id="fall-line" type="geojson" data={fallLineData}>
         <Layer
           id="fall-line-layer"

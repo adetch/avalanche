@@ -85,10 +85,13 @@ export function logAvalanchePath(result: AvalancheResult) {
     betaAspect,
     runoutAspect,
     bearingChange,
+    pathCount,
+    runoutRange,
   } = result;
 
   log(
     `[${timestamp()}] AVALANCHE_PATH | ` +
+    `paths=${pathCount} ` +
     `slope=${computedSlopeAngle.toFixed(1)}° ` +
     `alpha=${path.alphaAngle.toFixed(1)}° ` +
     `beta=${path.betaAngle.toFixed(1)}° ` +
@@ -97,6 +100,7 @@ export function logAvalanchePath(result: AvalancheResult) {
     `runout=${fmtPoint(path.runoutPoint.lngLat, path.runoutPoint.elevation)} aspect=${fmtAspect(runoutAspect)} ` +
     `bearing_change=${bearingChange.toFixed(0)}° ` +
     `drop=${verticalDrop.toFixed(0)}m runout=${horizontalRunout.toFixed(0)}m track=${trackLength.toFixed(0)}m ` +
+    `runout_range=[${runoutRange.min.toFixed(0)}m–${runoutRange.max.toFixed(0)}m median=${runoutRange.median.toFixed(0)}m] ` +
     `volume=${volume.toFixed(0)}m³ D-size=${destructiveSize}`
   );
 }
