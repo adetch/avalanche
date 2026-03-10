@@ -7,6 +7,32 @@ export interface ElevationPoint {
   distanceFromCrown: number;
 }
 
+/**
+ * Snow type presets bundling physical parameters that affect calculations.
+ * Derived from Bartelt et al. (1999), Salm et al. (1990), Sovilla et al. (2006).
+ */
+export interface SnowProfile {
+  id: string;
+  label: string;
+  density: number;           // kg/m³
+  entrainmentFactor: number; // multiplier on initial volume
+  frictionMu: number;        // Coulomb friction (for future Voellmy model)
+  frictionXi: number;        // turbulent friction m/s² (for future Voellmy model)
+}
+
+/**
+ * Regional regression coefficients for the alpha-beta model.
+ * α = a·β + b − k·σ where k depends on desired return period.
+ */
+export interface RegionCoefficients {
+  id: string;
+  label: string;
+  a: number;   // slope coefficient
+  b: number;   // intercept (degrees)
+  sigma: number; // standard deviation (degrees)
+  source: string;
+}
+
 export interface AvalanchePath {
   crownPoint: ElevationPoint;
   betaPoint: ElevationPoint;
@@ -47,6 +73,8 @@ export interface AvalancheResult {
   path: AvalanchePath;
   computedSlopeAngle: number;
   volume: number;
+  /** Estimated mass in tonnes (volume × density / 1000) */
+  mass: number;
   destructiveSize: 1 | 2 | 3 | 4 | 5;
   horizontalRunout: number;
   verticalDrop: number;

@@ -24,6 +24,8 @@ export default function AvalancheMap() {
   const clearFlyTo = useAvalancheStore((s) => s.clearFlyTo);
   const startingZonePolygon = useAvalancheStore((s) => s.startingZonePolygon);
   const snowDepth = useAvalancheStore((s) => s.snowDepth);
+  const snowProfile = useAvalancheStore((s) => s.snowProfile);
+  const region = useAvalancheStore((s) => s.region);
   const setSlopeAngle = useAvalancheStore((s) => s.setSlopeAngle);
   const setResult = useAvalancheStore((s) => s.setResult);
   const setComputing = useAvalancheStore((s) => s.setComputing);
@@ -76,13 +78,21 @@ export default function AvalancheMap() {
           map,
           startingZonePolygon,
           0, // slope angle is now computed from DEM
-          snowDepth
+          snowDepth,
+          snowProfile,
+          region
         );
         if (outcome.ok) {
           setResult(outcome.result);
           setSlopeAngle(Math.round(outcome.result.computedSlopeAngle));
           logStartingZone(outcome.result.computedSlopeAngle, area);
           logAvalanchePath(outcome.result);
+          // Warn if slope is below typical slab avalanche threshold
+          if (outcome.result.computedSlopeAngle < 25) {
+            setError(
+              `Slope angle (${Math.round(outcome.result.computedSlopeAngle)}°) is below the typical 25° threshold for slab avalanches. Results may be unreliable.`
+            );
+          }
         } else {
           const { failure } = outcome;
           logComputationFailed(failure.step, failure.reason, center, area, failure.details);
@@ -98,7 +108,7 @@ export default function AvalancheMap() {
     }, 500);
 
     return () => clearTimeout(timer);
-  }, [startingZonePolygon, snowDepth, setResult, setComputing, setError, setSlopeAngle]);
+  }, [startingZonePolygon, snowDepth, snowProfile, region, setResult, setComputing, setError, setSlopeAngle]);
 
   if (!MAPTILER_KEY) {
     return (

@@ -1,6 +1,8 @@
 import { create } from "zustand";
 import type { Polygon } from "geojson";
-import type { AvalancheResult, DrawingVertex } from "@/types";
+import type { AvalancheResult, DrawingVertex, SnowProfile, RegionCoefficients } from "@/types";
+import { DEFAULT_SNOW_PROFILE } from "@/lib/avalanche/snow-profiles";
+import { DEFAULT_REGION } from "@/lib/avalanche/alpha-beta";
 
 interface FlyToTarget {
   center: [number, number];
@@ -11,6 +13,8 @@ interface AvalancheStore {
   // Inputs
   slopeAngle: number;
   snowDepth: number;
+  snowProfile: SnowProfile;
+  region: RegionCoefficients;
 
   // Drawing
   drawingMode: boolean;
@@ -29,6 +33,8 @@ interface AvalancheStore {
   // Actions
   setSlopeAngle: (angle: number) => void;
   setSnowDepth: (depth: number) => void;
+  setSnowProfile: (profile: SnowProfile) => void;
+  setRegion: (region: RegionCoefficients) => void;
   setMapReady: (ready: boolean) => void;
   flyTo: (target: FlyToTarget) => void;
   clearFlyTo: () => void;
@@ -44,6 +50,8 @@ interface AvalancheStore {
 export const useAvalancheStore = create<AvalancheStore>((set, get) => ({
   slopeAngle: 38,
   snowDepth: 100,
+  snowProfile: DEFAULT_SNOW_PROFILE,
+  region: DEFAULT_REGION,
 
   drawingMode: false,
   drawingVertices: [],
@@ -58,6 +66,8 @@ export const useAvalancheStore = create<AvalancheStore>((set, get) => ({
 
   setSlopeAngle: (angle) => set({ slopeAngle: angle }),
   setSnowDepth: (depth) => set({ snowDepth: depth }),
+  setSnowProfile: (profile) => set({ snowProfile: profile }),
+  setRegion: (region) => set({ region }),
   setMapReady: (ready) => set({ mapReady: ready }),
 
   flyTo: (target) => set({ flyToTarget: target }),

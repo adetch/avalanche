@@ -6,6 +6,8 @@ import {
   computeAlphaAngle,
   computeAlphaConfidence,
   findRunoutPoint,
+  REGION_COEFFICIENTS,
+  DEFAULT_REGION,
 } from "./alpha-beta";
 
 /** Helper to create a profile point */
@@ -200,5 +202,33 @@ describe("computeAlphaConfidence", () => {
   it("low is clamped to minimum 1°", () => {
     const conf = computeAlphaConfidence(5);
     expect(conf.low).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("regional coefficients", () => {
+  it("default region is Norway", () => {
+    expect(DEFAULT_REGION.id).toBe("norway");
+    expect(DEFAULT_REGION.a).toBe(0.96);
+    expect(DEFAULT_REGION.b).toBe(-1.4);
+    expect(DEFAULT_REGION.sigma).toBe(2.3);
+  });
+
+  it("computeAlphaAngle uses regional coefficients", () => {
+    const colorado = REGION_COEFFICIENTS.find((r) => r.id === "colorado")!;
+    // Colorado: α = 0.92 * 25 + 0.3 = 23.3
+    expect(computeAlphaAngle(25, colorado)).toBeCloseTo(23.3, 5);
+    // Norway: α = 0.96 * 25 - 1.4 = 22.6
+    expect(computeAlphaAngle(25, DEFAULT_REGION)).toBeCloseTo(22.6, 5);
+  });
+
+  it("computeAlphaConfidence uses regional sigma", () => {
+    const colorado = REGION_COEFFICIENTS.find((r) => r.id === "colorado")!;
+    const conf = computeAlphaConfidence(25, colorado);
+    expect(conf.mid - conf.low).toBeCloseTo(colorado.sigma, 5);
+    expect(conf.high - conf.mid).toBeCloseTo(colorado.sigma, 5);
+  });
+
+  it("has 5 regions defined", () => {
+    expect(REGION_COEFFICIENTS.length).toBe(5);
   });
 });

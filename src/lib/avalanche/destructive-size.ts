@@ -1,20 +1,21 @@
 /**
  * Classify avalanche destructive size (D1–D5)
- * based on estimated volume (Canadian/EAWS scale).
+ * based on estimated mass in tonnes (CAA/EAWS scale).
  *
- * D1: < 100 m³      Relatively harmless to people
- * D2: 100–1,000 m³  Could bury/injure/kill a person
- * D3: 1k–10k m³     Could destroy a car or small building
- * D4: 10k–100k m³   Could destroy a railway car or large building
- * D5: > 100k m³     Could destroy a village or 40 ha of forest
+ * Mass thresholds (tonnes):
+ * D1: < 10 t        Relatively harmless to people
+ * D2: 10–100 t      Could bury/injure/kill a person
+ * D3: 100–1,000 t   Could destroy a car or small building
+ * D4: 1k–10k t      Could destroy a railway car or large building
+ * D5: > 10k t       Could destroy a village or 40 ha of forest
  */
 export function classifyDestructiveSize(
-  volumeCubicMeters: number
+  massTonnes: number
 ): 1 | 2 | 3 | 4 | 5 {
-  if (volumeCubicMeters < 100) return 1;
-  if (volumeCubicMeters < 1_000) return 2;
-  if (volumeCubicMeters < 10_000) return 3;
-  if (volumeCubicMeters < 100_000) return 4;
+  if (massTonnes < 10) return 1;
+  if (massTonnes < 100) return 2;
+  if (massTonnes < 1_000) return 3;
+  if (massTonnes < 10_000) return 4;
   return 5;
 }
 

@@ -1,11 +1,32 @@
-import type { ElevationPoint } from "@/types";
+import type { ElevationPoint, RegionCoefficients } from "@/types";
 import { computeSlopeAngle } from "@/lib/geo/slope";
 
 const BETA_SLOPE_THRESHOLD = 10; // degrees
 const BETA_WINDOW_SIZE = 3; // consecutive points below threshold needed
 
-/** Standard deviation for the Lied & Bakkehoi regression (degrees) */
-const ALPHA_BETA_SD = 2.3;
+/**
+ * Regional coefficient sets for the alpha-beta model.
+ * α = a·β + b, with standard deviation σ.
+ *
+ * Sources:
+ * - Lied & Bakkehøi (1980), Bakkehøi et al. (1983)
+ * - McClung & Mears (1991)
+ * - Mears (1989, 1992)
+ * - Jóhannesson (1998)
+ */
+export const REGION_COEFFICIENTS: RegionCoefficients[] = [
+  { id: "norway", label: "Norway", a: 0.96, b: -1.4, sigma: 2.3, source: "Lied & Bakkehøi (1980)" },
+  { id: "canadian-rockies", label: "Canadian Rockies", a: 0.93, b: -0.1, sigma: 2.5, source: "McClung & Mears (1991)" },
+  { id: "colorado", label: "Colorado", a: 0.92, b: 0.3, sigma: 2.2, source: "Mears (1989)" },
+  { id: "iceland", label: "Iceland", a: 0.91, b: -0.7, sigma: 2.0, source: "Jóhannesson (1998)" },
+  { id: "sierra-nevada", label: "Sierra Nevada", a: 0.91, b: 1.2, sigma: 2.3, source: "Mears (1992)" },
+];
+
+export const DEFAULT_REGION = REGION_COEFFICIENTS[0]; // Norway
+
+export function findRegion(id: string): RegionCoefficients | undefined {
+  return REGION_COEFFICIENTS.find((r) => r.id === id);
+}
 
 export interface AlphaConfidence {
   /** Conservative runout (α − 1σ, ~84th percentile) */
@@ -60,16 +81,19 @@ export function computeBetaAngle(
 }
 
 /**
- * Compute alpha angle using the Lied & Bakkehoi (1980) regression:
- * alpha = 0.96 * beta - 1.4
+ * Compute alpha angle using regional regression coefficients:
+ * α = a·β + b
  * Clamped to a minimum of 1° to avoid nonsensical results on gentle terrain.
  */
-export function computeAlphaAngle(betaAngle: number): number {
-  return Math.max(0.96 * betaAngle - 1.4, 1);
+export function computeAlphaAngle(
+  betaAngle: number,
+  region: RegionCoefficients = DEFAULT_REGION
+): number {
+  return Math.max(region.a * betaAngle + region.b, 1);
 }
 
 /**
- * Compute alpha angle confidence bands using the regression standard deviation.
+ * Compute alpha angle confidence bands using regional regression coefficients.
  *
  * - low: α − 1σ → longer runout (~84th percentile, conservative)
  * - mid: α (mean)
@@ -77,12 +101,15 @@ export function computeAlphaAngle(betaAngle: number): number {
  *
  * Lower alpha angles mean the avalanche travels further.
  */
-export function computeAlphaConfidence(betaAngle: number): AlphaConfidence {
-  const mid = computeAlphaAngle(betaAngle);
+export function computeAlphaConfidence(
+  betaAngle: number,
+  region: RegionCoefficients = DEFAULT_REGION
+): AlphaConfidence {
+  const mid = computeAlphaAngle(betaAngle, region);
   return {
-    low: Math.max(mid - ALPHA_BETA_SD, 1),
+    low: Math.max(mid - region.sigma, 1),
     mid,
-    high: mid + ALPHA_BETA_SD,
+    high: mid + region.sigma,
   };
 }
 

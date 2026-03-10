@@ -8,8 +8,8 @@ import type { ElevationPoint } from "@/types";
 const GRADIENT_WEIGHT = 0.7;
 /** Minimum slope (degrees) before we consider terrain effectively flat */
 const FLAT_SLOPE_THRESHOLD = 1.5;
-/** How many consecutive uphill steps before we stop */
-const MAX_UPHILL_STEPS = 3;
+/** How many consecutive uphill steps before we stop (5 tolerates moraines/opposing slopes) */
+const MAX_UPHILL_STEPS = 5;
 /** Gradient sample radius in meters */
 const GRADIENT_SAMPLE_RADIUS_M = 30;
 

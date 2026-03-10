@@ -6,6 +6,8 @@ import type {
   AvalanchePath,
   ElevationPoint,
   PathResult,
+  SnowProfile,
+  RegionCoefficients,
 } from "@/types";
 import { findHighestPoint } from "@/lib/geo/elevation";
 import { computeAverageSlope } from "@/lib/geo/slope";
@@ -17,6 +19,7 @@ import {
   computeAlphaAngle,
   computeAlphaConfidence,
   findRunoutPoint,
+  DEFAULT_REGION,
 } from "./alpha-beta";
 import { computeVolume } from "./volume";
 import { classifyDestructiveSize } from "./destructive-size";
@@ -26,6 +29,7 @@ import {
 } from "./zones";
 import { sampleReleasePoints } from "./release-points";
 import type { ReleasePoint } from "./release-points";
+import { DEFAULT_SNOW_PROFILE } from "./snow-profiles";
 
 export interface ComputeFailure {
   reason: string;
@@ -75,12 +79,13 @@ function aspectAtProfilePoint(
  */
 function computeSinglePath(
   map: MaplibreMap,
-  releasePoint: ReleasePoint
+  releasePoint: ReleasePoint,
+  region: RegionCoefficients = DEFAULT_REGION
 ): PathResult | null {
   const { lngLat, elevation, aspectDeg: initialBearing } = releasePoint;
 
   // Extract elevation profile by following steepest descent
-  const profile = extractGradientProfile(map, lngLat, initialBearing, 3000, 10);
+  const profile = extractGradientProfile(map, lngLat, initialBearing, 5000, 10);
   if (profile.length < 5) {
     console.log(`[avalanche] path failed: profile too short (${profile.length} pts) at [${lngLat}] elev=${elevation.toFixed(0)}m`);
     return null;
@@ -104,10 +109,10 @@ function computeSinglePath(
     return null;
   }
 
-  // Compute alpha angle and runout
+  // Compute alpha angle and runout using regional coefficients
   const betaAngle = computeBetaAngle(crownPoint, betaPoint);
-  const alphaAngle = computeAlphaAngle(betaAngle);
-  const alphaConfidence = computeAlphaConfidence(betaAngle);
+  const alphaAngle = computeAlphaAngle(betaAngle, region);
+  const alphaConfidence = computeAlphaConfidence(betaAngle, region);
   const runoutPoint = findRunoutPoint(profile, crownPoint, alphaAngle, betaPoint);
   if (!runoutPoint) {
     console.log(`[avalanche] path failed: no runout point at [${lngLat}] beta=${betaAngle.toFixed(1)}° alpha=${alphaAngle.toFixed(1)}°`);
@@ -159,8 +164,12 @@ export function computeAvalanchePath(
   map: MaplibreMap,
   startingZone: Polygon,
   _slopeAngle: number,
-  snowDepthCm: number
+  snowDepthCm: number,
+  snowProfile: SnowProfile = DEFAULT_SNOW_PROFILE,
+  region: RegionCoefficients = DEFAULT_REGION
 ): ComputeResult {
+  const t0 = performance.now();
+
   // 1. Sample release points within the polygon
   const releasePoints = sampleReleasePoints(map, startingZone, 7);
 
@@ -206,7 +215,7 @@ export function computeAvalanchePath(
   const allPaths: PathResult[] = [];
   let failCount = 0;
   for (const rp of releasePoints) {
-    const path = computeSinglePath(map, rp);
+    const path = computeSinglePath(map, rp, region);
     if (path) {
       allPaths.push(path);
     } else {
@@ -238,22 +247,29 @@ export function computeAvalanchePath(
     };
   }
 
+  const t1 = performance.now();
+
   // 3. Select primary path: longest runout (conservative)
   allPaths.sort((a, b) => b.horizontalRunout - a.horizontalRunout);
   const primary = allPaths[0];
 
   // 4. Generate zone geometries from the path ensemble
   const { trackZone, runoutZone } = generateZones(allPaths, primary);
+  const t2 = performance.now();
+  console.log(
+    `[avalanche] timing: paths=${(t1 - t0).toFixed(0)}ms zones=${(t2 - t1).toFixed(0)}ms total=${(t2 - t0).toFixed(0)}ms`
+  );
   const trackPoly = trackZone ?? startingZone;
   const runoutPoly = runoutZone ?? startingZone;
 
-  // 5. Compute volume and destructive size
+  // 5. Compute volume, mass, and destructive size
   const areaSqMeters = turf.area(startingZone);
   const slopeRad = (primary.slopeAngle * Math.PI) / 180;
   const slopeAreaFactor = 1 / Math.cos(slopeRad);
   const effectiveArea = areaSqMeters * slopeAreaFactor;
-  const volume = computeVolume(effectiveArea, snowDepthCm);
-  const destructiveSize = classifyDestructiveSize(volume);
+  const volume = computeVolume(effectiveArea, snowDepthCm, snowProfile.entrainmentFactor);
+  const massTonnes = (volume * snowProfile.density) / 1000; // kg → tonnes
+  const destructiveSize = classifyDestructiveSize(massTonnes);
 
   // 6. Track length
   const trackLength = Math.sqrt(
@@ -286,6 +302,7 @@ export function computeAvalanchePath(
         runoutZone: runoutPoly,
       },
       volume,
+      mass: massTonnes,
       destructiveSize,
       horizontalRunout: primary.horizontalRunout,
       verticalDrop: primary.verticalDrop,
