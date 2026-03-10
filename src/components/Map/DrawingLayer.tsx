@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect } from "react";
+import { useEffect } from "react";
+import type { MapMouseEvent } from "maplibre-gl";
 import { Source, Layer, type MapRef } from "react-map-gl/maplibre";
 import { useAvalancheStore } from "@/store/useAvalancheStore";
 import type { Feature, Polygon, LineString, Point } from "geojson";
@@ -21,14 +22,22 @@ export default function DrawingLayer({ mapRef }: DrawingLayerProps) {
     const map = mapRef.current?.getMap();
     if (!map) return;
 
-    const handleClick = (e: maplibregl.MapMouseEvent) => {
+    const handleClick = (e: MapMouseEvent) => {
       if (!useAvalancheStore.getState().drawingMode) return;
       addDrawingVertex({ lngLat: [e.lngLat.lng, e.lngLat.lat] });
     };
 
-    const handleDblClick = (e: maplibregl.MapMouseEvent) => {
+    const handleDblClick = (e: MapMouseEvent) => {
       if (!useAvalancheStore.getState().drawingMode) return;
       e.preventDefault();
+      // Double-click fires click first, adding a duplicate vertex.
+      // Remove it before finalizing the polygon.
+      const state = useAvalancheStore.getState();
+      if (state.drawingVertices.length > 0) {
+        useAvalancheStore.setState({
+          drawingVertices: state.drawingVertices.slice(0, -1),
+        });
+      }
       finishDrawing();
     };
 

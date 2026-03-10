@@ -62,7 +62,7 @@ export function computeAvalanchePath(
   // 5. Compute alpha angle and runout
   const betaAngle = computeBetaAngle(crownPoint, betaPoint);
   const alphaAngle = computeAlphaAngle(betaAngle);
-  const runoutPoint = findRunoutPoint(profile, crownPoint, alphaAngle);
+  const runoutPoint = findRunoutPoint(profile, crownPoint, alphaAngle, betaPoint);
   if (!runoutPoint) return null;
 
   // 6. Generate zone geometries
@@ -85,8 +85,13 @@ export function computeAvalanchePath(
   const runoutPoly = runoutZone ?? startingZone;
 
   // 7. Compute volume and destructive size
+  // Use slope angle to adjust the effective slab area:
+  // steeper slopes release more efficiently (area / cos(slope))
   const areaSqMeters = turf.area(startingZone);
-  const volume = computeVolume(areaSqMeters, snowDepthCm);
+  const slopeRad = (slopeAngle * Math.PI) / 180;
+  const slopeAreaFactor = 1 / Math.cos(slopeRad);
+  const effectiveArea = areaSqMeters * slopeAreaFactor;
+  const volume = computeVolume(effectiveArea, snowDepthCm);
   const destructiveSize = classifyDestructiveSize(volume);
 
   // 8. Distances

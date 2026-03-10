@@ -2,7 +2,7 @@
 
 import { Source, Layer } from "react-map-gl/maplibre";
 import { useAvalancheStore } from "@/store/useAvalancheStore";
-import type { Feature, Polygon, LineString, Point } from "geojson";
+import type { Feature, Polygon, LineString } from "geojson";
 
 export default function PathOverlay() {
   const result = useAvalancheStore((s) => s.result);

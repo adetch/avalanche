@@ -132,7 +132,6 @@ export default function AvalancheMap() {
       style={{ width: "100%", height: "100%" }}
       mapStyle={`https://api.maptiler.com/maps/outdoor-v2/style.json?key=${MAPTILER_KEY}`}
       onLoad={onMapLoad}
-      terrain={{ source: "terrain-dem", exaggeration: 1.2 }}
       maxPitch={85}
     >
       <NavigationControl position="top-right" />

@@ -1,5 +1,5 @@
 import * as turf from "@turf/turf";
-import type { Polygon } from "geojson";
+import type { Polygon, MultiPolygon } from "geojson";
 import type { ElevationPoint } from "@/types";
 
 /**
@@ -21,7 +21,25 @@ function buildZonePolygon(
 
   if (!buffered) return null;
 
-  return buffered.geometry as Polygon;
+  const geom = buffered.geometry;
+
+  // turf.buffer can return MultiPolygon for complex geometries;
+  // use only the largest polygon in that case
+  if (geom.type === "MultiPolygon") {
+    let largest: Polygon | null = null;
+    let largestArea = 0;
+    for (const polyCoords of (geom as MultiPolygon).coordinates) {
+      const poly: Polygon = { type: "Polygon", coordinates: polyCoords };
+      const a = turf.area(poly);
+      if (a > largestArea) {
+        largestArea = a;
+        largest = poly;
+      }
+    }
+    return largest;
+  }
+
+  return geom as Polygon;
 }
 
 /**

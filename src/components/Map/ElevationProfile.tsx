@@ -7,7 +7,7 @@ export default function ElevationProfile() {
 
   if (!result) return null;
 
-  const { profile, crownPoint, betaPoint, runoutPoint } = result.path;
+  const { profile, betaPoint, runoutPoint } = result.path;
   if (profile.length < 2) return null;
 
   // SVG dimensions

@@ -1,4 +1,4 @@
-import type { Polygon, Position } from "geojson";
+import type { Polygon } from "geojson";
 
 export interface ElevationPoint {
   lngLat: [number, number];
