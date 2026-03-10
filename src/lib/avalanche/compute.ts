@@ -4,8 +4,9 @@ import * as turf from "@turf/turf";
 import type { AvalancheResult, ElevationPoint } from "@/types";
 import { findHighestPoint } from "@/lib/geo/elevation";
 import { computeAverageSlope } from "@/lib/geo/slope";
+import { computeLocalGradient, bearingToCardinal } from "@/lib/geo/gradient";
 import { computeFallLineDirection } from "./fall-line";
-import { extractElevationProfile } from "./profile";
+import { extractGradientProfile } from "./profile";
 import {
   findBetaPoint,
   computeBetaAngle,
@@ -32,7 +33,43 @@ type ComputeResult =
   | { ok: false; failure: ComputeFailure };
 
 /**
+ * Compute the bearing from one profile point to the next.
+ */
+function bearingBetween(a: ElevationPoint, b: ElevationPoint): number {
+  return turf.bearing(turf.point(a.lngLat), turf.point(b.lngLat));
+}
+
+/**
+ * Normalize a bearing to 0-360 range.
+ */
+function normalizeBearing(b: number): number {
+  return ((b % 360) + 360) % 360;
+}
+
+/**
+ * Get the aspect (facing direction) at a profile point by looking at
+ * the bearing to the next point. Falls back to gradient computation.
+ */
+function aspectAtProfilePoint(
+  profile: ElevationPoint[],
+  index: number
+): number {
+  if (index < profile.length - 1) {
+    return normalizeBearing(bearingBetween(profile[index], profile[index + 1]));
+  }
+  if (index > 0) {
+    return normalizeBearing(
+      bearingBetween(profile[index - 1], profile[index])
+    );
+  }
+  return 0;
+}
+
+/**
  * Run the full avalanche path computation pipeline.
+ *
+ * Uses gradient-following to trace the path along the steepest descent
+ * from the crown point, naturally following terrain curvature.
  */
 export function computeAvalanchePath(
   map: MaplibreMap,
@@ -56,14 +93,27 @@ export function computeAvalanchePath(
     };
   }
 
-  // 2. Compute fall-line direction
-  const fallLineAzimuth = computeFallLineDirection(map, crown.lngLat);
+  // 2. Compute initial fall-line direction at the crown using gradient
+  const crownGradient = computeFallLineDirection(map, crown.lngLat);
+  if (!crownGradient) {
+    return {
+      ok: false,
+      failure: {
+        reason:
+          "Could not compute terrain gradient at crown point. Elevation data may be unavailable.",
+        step: "fall_line",
+        details: { crownLngLat: crown.lngLat, crownElev: crown.elevation },
+      },
+    };
+  }
 
-  // 3. Extract elevation profile along the fall-line
-  const profile = extractElevationProfile(
+  const initialBearing = crownGradient.aspectDeg;
+
+  // 3. Extract elevation profile by following the steepest descent
+  const profile = extractGradientProfile(
     map,
     crown.lngLat,
-    fallLineAzimuth,
+    initialBearing,
     3000,
     10
   );
@@ -76,7 +126,7 @@ export function computeAvalanchePath(
         details: {
           profileLength: profile.length,
           crownElev: crown.elevation,
-          azimuth: fallLineAzimuth,
+          initialBearing,
         },
       },
     };
@@ -115,7 +165,12 @@ export function computeAvalanchePath(
   // 6. Compute alpha angle and runout
   const betaAngle = computeBetaAngle(crownPoint, betaPoint);
   const alphaAngle = computeAlphaAngle(betaAngle);
-  const runoutPoint = findRunoutPoint(profile, crownPoint, alphaAngle, betaPoint);
+  const runoutPoint = findRunoutPoint(
+    profile,
+    crownPoint,
+    alphaAngle,
+    betaPoint
+  );
   if (!runoutPoint) {
     return {
       ok: false,
@@ -154,7 +209,7 @@ export function computeAvalanchePath(
   // 8. Compute volume and destructive size
   const areaSqMeters = turf.area(startingZone);
   const slopeRad = (computedSlopeAngle * Math.PI) / 180;
-  const slopeAreaFactor = 1 / Math.cos(slopeRad || 1);
+  const slopeAreaFactor = 1 / Math.cos(slopeRad);
   const effectiveArea = areaSqMeters * slopeAreaFactor;
   const volume = computeVolume(effectiveArea, snowDepthCm);
   const destructiveSize = classifyDestructiveSize(volume);
@@ -166,6 +221,17 @@ export function computeAvalanchePath(
     horizontalRunout * horizontalRunout + verticalDrop * verticalDrop
   );
 
+  // 10. Compute aspect at key points along the path
+  const crownAspect = initialBearing;
+  const betaProfileIdx = findProfileIndex(profile, betaPoint);
+  const runoutProfileIdx = findProfileIndex(profile, runoutPoint);
+  const betaAspect = aspectAtProfilePoint(profile, betaProfileIdx);
+  const runoutAspect = aspectAtProfilePoint(profile, runoutProfileIdx);
+
+  // Bearing change: total direction change from crown to runout
+  let bearingChange = Math.abs(runoutAspect - crownAspect);
+  if (bearingChange > 180) bearingChange = 360 - bearingChange;
+
   return {
     ok: true,
     result: {
@@ -174,7 +240,7 @@ export function computeAvalanchePath(
         crownPoint,
         betaPoint,
         runoutPoint,
-        fallLineAzimuth,
+        fallLineAzimuth: initialBearing,
         betaAngle,
         alphaAngle,
         profile,
@@ -187,6 +253,10 @@ export function computeAvalanchePath(
       horizontalRunout,
       verticalDrop,
       trackLength,
+      crownAspect,
+      betaAspect,
+      runoutAspect,
+      bearingChange,
     },
   };
 }

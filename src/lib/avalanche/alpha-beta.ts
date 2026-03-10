@@ -4,6 +4,18 @@ import { computeSlopeAngle } from "@/lib/geo/slope";
 const BETA_SLOPE_THRESHOLD = 10; // degrees
 const BETA_WINDOW_SIZE = 3; // consecutive points below threshold needed
 
+/** Standard deviation for the Lied & Bakkehoi regression (degrees) */
+const ALPHA_BETA_SD = 2.3;
+
+export interface AlphaConfidence {
+  /** Conservative runout (α − 1σ, ~84th percentile) */
+  low: number;
+  /** Mean runout (α) */
+  mid: number;
+  /** Liberal/short runout (α + 1σ, ~16th percentile) */
+  high: number;
+}
+
 /**
  * Find the beta point: where local slope drops below 10 degrees
  * for BETA_WINDOW_SIZE consecutive points (avoids DEM noise false positives).
@@ -57,6 +69,24 @@ export function computeAlphaAngle(betaAngle: number): number {
 }
 
 /**
+ * Compute alpha angle confidence bands using the regression standard deviation.
+ *
+ * - low: α − 1σ → longer runout (~84th percentile, conservative)
+ * - mid: α (mean)
+ * - high: α + 1σ → shorter runout (~16th percentile)
+ *
+ * Lower alpha angles mean the avalanche travels further.
+ */
+export function computeAlphaConfidence(betaAngle: number): AlphaConfidence {
+  const mid = computeAlphaAngle(betaAngle);
+  return {
+    low: Math.max(mid - ALPHA_BETA_SD, 1),
+    mid,
+    high: mid + ALPHA_BETA_SD,
+  };
+}
+
+/**
  * Find the runout point where the terrain profile crosses
  * the alpha-angle line drawn from the crown point.
  *
@@ -85,12 +115,22 @@ export function findRunoutPoint(
 
   // Look for where terrain crosses back above the alpha line after being below
   let wasBelow = false;
+  let closestApproachIdx = startIdx;
+  let closestApproachGap = Infinity;
+
   for (let i = startIdx; i < profile.length; i++) {
     const dist = profile[i].distanceFromCrown - crown.distanceFromCrown;
     const alphaLineElev = crown.elevation - tanAlpha * dist;
+    const gap = alphaLineElev - profile[i].elevation;
 
     if (profile[i].elevation < alphaLineElev) {
       wasBelow = true;
+    }
+
+    // Track closest approach for fallback
+    if (gap >= 0 && gap < closestApproachGap) {
+      closestApproachGap = gap;
+      closestApproachIdx = i;
     }
 
     if (wasBelow && profile[i].elevation >= alphaLineElev) {
@@ -98,6 +138,12 @@ export function findRunoutPoint(
     }
   }
 
-  // If no crossing found, use the end of the profile
+  // If terrain never dips below alpha line, use closest approach point
+  // instead of blindly returning the profile end (fixes H4: gentle-terrain overestimation)
+  if (!wasBelow) {
+    return profile[closestApproachIdx];
+  }
+
+  // If terrain dipped below but never crossed back, use the end
   return profile[profile.length - 1];
 }

@@ -4,6 +4,7 @@ import {
   findBetaPoint,
   computeBetaAngle,
   computeAlphaAngle,
+  computeAlphaConfidence,
   findRunoutPoint,
 } from "./alpha-beta";
 
@@ -149,5 +150,55 @@ describe("findRunoutPoint", () => {
 
   it("returns null for empty profile", () => {
     expect(findRunoutPoint([], pt(0, 100), 10, pt(50, 90))).toBeNull();
+  });
+
+  it("returns closest approach on gentle terrain where terrain stays above alpha line", () => {
+    const crown = pt(0, 1000);
+    const alphaAngle = 10; // tan(10°) ≈ 0.1763
+    const betaPoint = pt(100, 985);
+
+    // Terrain drops gently (slope < alpha angle), so terrain stays ABOVE the alpha line.
+    // Alpha line at d: 1000 - tan(10°)*d = 1000 - 0.1763*d
+    // Terrain at d:    1000 - 0.01*d  (very gentle ~0.6° slope)
+    // Gap = terrain - alpha_line = 0.1663*d  (gap grows with distance)
+    // BUT we add a dip near d=200 so closest approach is there
+    const profile: ElevationPoint[] = [];
+    for (let d = 0; d <= 500; d += 10) {
+      const alphaElev = 1000 - Math.tan((10 * Math.PI) / 180) * d;
+      // Base terrain gently slopes, stays above alpha, with a dip toward it near 200m
+      const dip = d >= 180 && d <= 220 ? 15 : 0;
+      const terrain = 1000 - 0.01 * d - dip;
+      // Ensure terrain stays above alpha line even with the dip
+      profile.push(pt(d, Math.max(terrain, alphaElev + 1)));
+    }
+
+    const runout = findRunoutPoint(profile, crown, alphaAngle, betaPoint);
+    expect(runout).not.toBeNull();
+    // Should be near the dip (d≈200), not at end of profile (d=500)
+    expect(runout!.distanceFromCrown).toBeLessThanOrEqual(300);
+  });
+});
+
+describe("computeAlphaConfidence", () => {
+  it("returns low < mid < high", () => {
+    const conf = computeAlphaConfidence(25);
+    expect(conf.low).toBeLessThan(conf.mid);
+    expect(conf.mid).toBeLessThan(conf.high);
+  });
+
+  it("mid matches computeAlphaAngle", () => {
+    const conf = computeAlphaConfidence(25);
+    expect(conf.mid).toBeCloseTo(computeAlphaAngle(25), 5);
+  });
+
+  it("bands are separated by the standard deviation (2.3°)", () => {
+    const conf = computeAlphaConfidence(25);
+    expect(conf.mid - conf.low).toBeCloseTo(2.3, 5);
+    expect(conf.high - conf.mid).toBeCloseTo(2.3, 5);
+  });
+
+  it("low is clamped to minimum 1°", () => {
+    const conf = computeAlphaConfidence(5);
+    expect(conf.low).toBeGreaterThanOrEqual(1);
   });
 });
