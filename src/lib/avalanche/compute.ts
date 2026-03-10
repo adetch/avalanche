@@ -21,10 +21,8 @@ import {
 import { computeVolume } from "./volume";
 import { classifyDestructiveSize } from "./destructive-size";
 import {
-  generateTrackZone,
-  generateRunoutZone,
+  generateZones,
   findProfileIndex,
-  estimateStartingZoneWidth,
 } from "./zones";
 import { sampleReleasePoints } from "./release-points";
 import type { ReleasePoint } from "./release-points";
@@ -83,7 +81,10 @@ function computeSinglePath(
 
   // Extract elevation profile by following steepest descent
   const profile = extractGradientProfile(map, lngLat, initialBearing, 3000, 10);
-  if (profile.length < 5) return null;
+  if (profile.length < 5) {
+    console.log(`[avalanche] path failed: profile too short (${profile.length} pts) at [${lngLat}] elev=${elevation.toFixed(0)}m`);
+    return null;
+  }
 
   const crownPoint: ElevationPoint = {
     lngLat,
@@ -98,14 +99,20 @@ function computeSinglePath(
 
   // Find beta point
   const betaPoint = findBetaPoint(profile);
-  if (!betaPoint) return null;
+  if (!betaPoint) {
+    console.log(`[avalanche] path failed: no beta point at [${lngLat}] elev=${elevation.toFixed(0)}m profileLen=${profile.length}`);
+    return null;
+  }
 
   // Compute alpha angle and runout
   const betaAngle = computeBetaAngle(crownPoint, betaPoint);
   const alphaAngle = computeAlphaAngle(betaAngle);
   const alphaConfidence = computeAlphaConfidence(betaAngle);
   const runoutPoint = findRunoutPoint(profile, crownPoint, alphaAngle, betaPoint);
-  if (!runoutPoint) return null;
+  if (!runoutPoint) {
+    console.log(`[avalanche] path failed: no runout point at [${lngLat}] beta=${betaAngle.toFixed(1)}° alpha=${alphaAngle.toFixed(1)}°`);
+    return null;
+  }
 
   // Distances
   const horizontalRunout = runoutPoint.distanceFromCrown;
@@ -197,9 +204,24 @@ export function computeAvalanchePath(
 
   // 2. Compute paths from each release point
   const allPaths: PathResult[] = [];
+  let failCount = 0;
   for (const rp of releasePoints) {
     const path = computeSinglePath(map, rp);
-    if (path) allPaths.push(path);
+    if (path) {
+      allPaths.push(path);
+    } else {
+      failCount++;
+    }
+  }
+  console.log(
+    `[avalanche] release points: ${releasePoints.length}, paths ok: ${allPaths.length}, failed: ${failCount}`
+  );
+  if (allPaths.length > 0) {
+    allPaths.forEach((p, i) =>
+      console.log(
+        `[avalanche]   path[${i}]: runout=${p.horizontalRunout.toFixed(0)}m drop=${p.verticalDrop.toFixed(0)}m bearing=${p.fallLineAzimuth.toFixed(0)}°`
+      )
+    );
   }
 
   if (allPaths.length === 0) {
@@ -220,25 +242,8 @@ export function computeAvalanchePath(
   allPaths.sort((a, b) => b.horizontalRunout - a.horizontalRunout);
   const primary = allPaths[0];
 
-  // 4. Generate zone geometries from the primary path
-  const zoneWidth = estimateStartingZoneWidth(startingZone);
-  const betaIdx = findProfileIndex(primary.profile, primary.betaPoint);
-  const runoutIdx = findProfileIndex(primary.profile, primary.runoutPoint);
-
-  const trackStart = Math.min(5, betaIdx);
-  const trackZone = generateTrackZone(
-    primary.profile,
-    trackStart,
-    betaIdx,
-    zoneWidth
-  );
-  const runoutZone = generateRunoutZone(
-    primary.profile,
-    betaIdx,
-    runoutIdx,
-    zoneWidth
-  );
-
+  // 4. Generate zone geometries from the path ensemble
+  const { trackZone, runoutZone } = generateZones(allPaths, primary);
   const trackPoly = trackZone ?? startingZone;
   const runoutPoly = runoutZone ?? startingZone;
 
