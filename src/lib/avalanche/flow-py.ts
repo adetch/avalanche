@@ -74,11 +74,13 @@ export function runFlowPy(
   const zMaxDelta = new Float32Array(totalCells);
   const rMax = new Float32Array(totalCells);
   const cellCount = new Uint16Array(totalCells);
+  // Mass-balance deposition: summed across release cells (additive — mass accumulates)
+  const deposition = new Float32Array(totalCells);
 
   const tanAlpha = Math.tan((params.alphaAngleDeg * Math.PI) / 180);
 
   for (const [startRow, startCol] of releaseCells) {
-    propagateSingleRelease(dem, startRow, startCol, params, tanAlpha, zMaxDelta, rMax, cellCount);
+    propagateSingleRelease(dem, startRow, startCol, params, tanAlpha, zMaxDelta, rMax, cellCount, deposition);
   }
 
   return {
@@ -89,6 +91,7 @@ export function runFlowPy(
     zMaxDelta,
     rMax,
     cellCount,
+    deposition,
   };
 }
 
@@ -124,17 +127,23 @@ function propagateSingleRelease(
   tanAlpha: number,
   outZMaxDelta: Float32Array,
   outRMax: Float32Array,
-  outCellCount: Uint16Array
+  outCellCount: Uint16Array,
+  outDeposition: Float32Array
 ): void {
   const { cols, rows } = dem;
   const { exponent, rStop } = params;
+  const totalCells = rows * cols;
 
   // Per-release-cell grids
-  const localZDelta = new Float32Array(rows * cols);
-  const localR = new Float32Array(rows * cols);
+  const localZDelta = new Float32Array(totalCells);
+  const localR = new Float32Array(totalCells);
   // Track incoming flow direction for persistence (weighted sum of parent directions)
-  const flowDirX = new Float32Array(rows * cols); // sum of sin(angle) * weight
-  const flowDirY = new Float32Array(rows * cols); // sum of cos(angle) * weight
+  const flowDirX = new Float32Array(totalCells); // sum of sin(angle) * weight
+  const flowDirY = new Float32Array(totalCells); // sum of cos(angle) * weight
+
+  // Mass tracking: SUM-accumulated influx for mass conservation
+  // (separate from localR which uses MAX-accumulation per Flow-Py spec)
+  const massIn = new Float32Array(totalCells);
 
   const startIdx = startRow * cols + startCol;
   const startElev = getElevation(dem, startRow, startCol);
@@ -143,6 +152,7 @@ function propagateSingleRelease(
   // Initialize release cell
   localZDelta[startIdx] = startElev; // z_delta = elevation above alpha line origin
   localR[startIdx] = 1.0;
+  massIn[startIdx] = 1.0; // unit mass enters at release
 
   // Get cells in descending elevation order
   const order = buildElevationOrder(dem);
@@ -150,14 +160,21 @@ function propagateSingleRelease(
   // Process every cell in elevation order
   for (const idx of order) {
     const cellR = localR[idx];
-    if (cellR < rStop) continue; // no flux here
+    if (cellR < rStop) {
+      // Flow died here — all accumulated mass deposits
+      if (massIn[idx] > 0) {
+        outDeposition[idx] += massIn[idx];
+      }
+      continue;
+    }
 
     const r = Math.floor(idx / cols);
     const c = idx % cols;
     const cellElev = dem.elevation[idx];
     const cellZDelta = localZDelta[idx];
+    const cellMass = massIn[idx];
 
-    // Composite into output
+    // Composite into output (R-max, z-delta-max, cell count)
     if (cellZDelta > outZMaxDelta[idx]) outZMaxDelta[idx] = cellZDelta;
     if (cellR > outRMax[idx]) outRMax[idx] = cellR;
     outCellCount[idx]++;
@@ -195,28 +212,28 @@ function propagateSingleRelease(
       downslopeNeighbors.push({ ni, idx: nIdx, tanPhi, dist, elev: nElev });
     }
 
-    if (downslopeNeighbors.length === 0 || sumTanPhiExp === 0) continue;
+    if (downslopeNeighbors.length === 0 || sumTanPhiExp === 0) {
+      // No downslope neighbors — all mass deposits here
+      outDeposition[idx] += cellMass;
+      continue;
+    }
 
     // Compute persistence weights from accumulated flow direction
     const hasMomentum = flowDirX[idx] !== 0 || flowDirY[idx] !== 0;
-    // Reconstruct incoming flow angle from accumulated direction vector
     const incomingAngle = hasMomentum
-      ? Math.atan2(flowDirX[idx], flowDirY[idx]) // atan2(sin, cos) → angle in radians
+      ? Math.atan2(flowDirX[idx], flowDirY[idx])
       : -1;
 
     let sumTP = 0;
     const neighborTP: number[] = [];
 
     for (const n of downslopeNeighbors) {
-      // Terrain routing weight (Holmgren MFD)
       const T = Math.pow(n.tanPhi, exponent) / sumTanPhiExp;
 
-      // Persistence weight
       let P = 1.0;
       if (hasMomentum) {
         const neighborAngle = NEIGHBOR_ANGLES[n.ni];
         let angleDiff = neighborAngle - incomingAngle;
-        // Normalize to [-PI, PI]
         while (angleDiff > Math.PI) angleDiff -= 2 * Math.PI;
         while (angleDiff < -Math.PI) angleDiff += 2 * Math.PI;
         P = Math.max(0, Math.cos(angleDiff));
@@ -227,9 +244,14 @@ function propagateSingleRelease(
       sumTP += tp;
     }
 
-    if (sumTP === 0) continue;
+    if (sumTP === 0) {
+      outDeposition[idx] += cellMass;
+      continue;
+    }
 
-    // Route flux and energy to each downslope neighbor
+    // Route flux, energy, and mass to each downslope neighbor
+    let totalMassRouted = 0;
+
     for (let i = 0; i < downslopeNeighbors.length; i++) {
       const n = downslopeNeighbors[i];
       const fraction = neighborTP[i] / sumTP;
@@ -237,23 +259,34 @@ function propagateSingleRelease(
 
       if (nR < rStop) continue;
 
-      // Z-delta: energy from elevation drop minus friction loss
       const nZDelta = cellZDelta + (cellElev - n.elev) - n.dist * tanAlpha;
 
       if (nZDelta <= 0) continue; // flow stops (below alpha line)
 
-      // Accumulate into neighbor (multiple parents can contribute)
+      // R-max accumulation (standard Flow-Py)
       if (nR > localR[n.idx]) {
-        localR[n.idx] = nR; // take max flux from any parent
+        localR[n.idx] = nR;
       }
       if (nZDelta > localZDelta[n.idx]) {
-        localZDelta[n.idx] = nZDelta; // take max energy from any parent
+        localZDelta[n.idx] = nZDelta;
       }
 
-      // Accumulate flow direction vector (weighted by flux)
+      // Mass: SUM-accumulation (conservation of mass)
+      const nMass = cellMass * fraction;
+      massIn[n.idx] += nMass;
+      totalMassRouted += nMass;
+
+      // Flow direction vector (weighted by flux for persistence)
       const outAngle = NEIGHBOR_ANGLES[n.ni];
       flowDirX[n.idx] += nR * Math.sin(outAngle);
       flowDirY[n.idx] += nR * Math.cos(outAngle);
+    }
+
+    // Mass that couldn't route onward deposits at this cell
+    // (due to rStop cutoff, z-delta exhaustion, or persistence blocking)
+    const deposited = cellMass - totalMassRouted;
+    if (deposited > 0) {
+      outDeposition[idx] += deposited;
     }
   }
 }

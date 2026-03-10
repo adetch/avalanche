@@ -6,6 +6,7 @@ import { Source, Layer, Marker, type MapRef } from "react-map-gl/maplibre";
 import * as turf from "@turf/turf";
 import { useAvalancheStore } from "@/store/useAvalancheStore";
 import { queryElevation } from "@/lib/geo/elevation";
+import { getDepthAtLngLat } from "@/components/Map/FlowPyOverlay";
 import type { Feature, Polygon, LineString, Point } from "geojson";
 
 const CLOSE_THRESHOLD_PX = 15;
@@ -59,6 +60,7 @@ interface CursorInfo {
   distanceFt: number;
   areaSqFt: number | null;
   slopeDeg: number | null;
+  burialDepthFt: number | null;
 }
 
 interface DrawingLayerProps {
@@ -214,13 +216,41 @@ export default function DrawingLayer({ mapRef }: DrawingLayerProps) {
 
     const handleMouseMove = (e: MapMouseEvent) => {
       const state = useAvalancheStore.getState();
-      if (!state.drawingMode) {
-        setNearFirstVertex(false);
-        setCursorInfo(null);
-        return;
+      const cursorLngLat: [number, number] = [e.lngLat.lng, e.lngLat.lat];
+
+      // Local slope at cursor — throttled to avoid excessive GPU readbacks
+      let slopeDeg = cachedSlope;
+      if (!lastSlopePixel ||
+        Math.abs(e.point.x - lastSlopePixel.x) > 5 ||
+        Math.abs(e.point.y - lastSlopePixel.y) > 5
+      ) {
+        slopeDeg = computeLocalSlope(map, cursorLngLat);
+        cachedSlope = slopeDeg;
+        lastSlopePixel = { x: e.point.x, y: e.point.y };
       }
 
-      const cursorLngLat: [number, number] = [e.lngLat.lng, e.lngLat.lat];
+      // Burial depth at cursor (if Flow-Py results exist)
+      let burialDepthFt: number | null = null;
+      const flowPy = state.result?.flowPy;
+      if (flowPy) {
+        const snowDepthM = state.snowDepth / 100;
+        const depthM = getDepthAtLngLat(flowPy, cursorLngLat[0], cursorLngLat[1], snowDepthM);
+        if (depthM !== null && depthM >= 0.02) {
+          burialDepthFt = depthM * METERS_TO_FEET;
+        }
+      }
+
+      if (!state.drawingMode) {
+        setNearFirstVertex(false);
+        setCursorInfo({
+          lngLat: cursorLngLat,
+          distanceFt: 0,
+          areaSqFt: null,
+          slopeDeg,
+          burialDepthFt,
+        });
+        return;
+      }
 
       // Proximity to first vertex
       if (state.drawingVertices.length >= 3) {
@@ -235,17 +265,6 @@ export default function DrawingLayer({ mapRef }: DrawingLayerProps) {
         setNearFirstVertex(dist < CLOSE_THRESHOLD_PX);
       } else {
         setNearFirstVertex(false);
-      }
-
-      // Local slope at cursor — throttled to avoid excessive GPU readbacks
-      let slopeDeg = cachedSlope;
-      if (!lastSlopePixel ||
-        Math.abs(e.point.x - lastSlopePixel.x) > 5 ||
-        Math.abs(e.point.y - lastSlopePixel.y) > 5
-      ) {
-        slopeDeg = computeLocalSlope(map, cursorLngLat);
-        cachedSlope = slopeDeg;
-        lastSlopePixel = { x: e.point.x, y: e.point.y };
       }
 
       // Distance from last vertex to cursor
@@ -266,6 +285,7 @@ export default function DrawingLayer({ mapRef }: DrawingLayerProps) {
           distanceFt: distFt,
           areaSqFt: liveArea,
           slopeDeg,
+          burialDepthFt,
         });
       } else {
         setCursorInfo({
@@ -273,6 +293,7 @@ export default function DrawingLayer({ mapRef }: DrawingLayerProps) {
           distanceFt: 0,
           areaSqFt: null,
           slopeDeg,
+          burialDepthFt,
         });
       }
     };
@@ -422,8 +443,8 @@ export default function DrawingLayer({ mapRef }: DrawingLayerProps) {
         </Source>
       )}
 
-      {/* Cursor label: distance + live area */}
-      {drawingMode && cursorInfo && (
+      {/* Cursor label: slope angle (always), distance + live area (drawing only) */}
+      {cursorInfo && (
         <Marker
           longitude={cursorInfo.lngLat[0]}
           latitude={cursorInfo.lngLat[1]}
@@ -452,6 +473,16 @@ export default function DrawingLayer({ mapRef }: DrawingLayerProps) {
               <>
                 <span className="mx-1.5 text-zinc-400">|</span>
                 <span>{formatArea(cursorInfo.areaSqFt)}</span>
+              </>
+            )}
+            {cursorInfo.burialDepthFt !== null && (
+              <>
+                <span className="mx-1.5 text-zinc-400">|</span>
+                <span className="text-orange-300">
+                  {cursorInfo.burialDepthFt < 1
+                    ? `~${Math.round(cursorInfo.burialDepthFt * 12)} in`
+                    : `~${cursorInfo.burialDepthFt.toFixed(1)} ft`}
+                </span>
               </>
             )}
           </div>

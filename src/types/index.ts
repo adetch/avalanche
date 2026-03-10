@@ -127,6 +127,13 @@ export interface FlowPyGridResult {
   rMax: Float32Array;
   /** Count of release cells that reached each cell */
   cellCount: Uint16Array;
+  /**
+   * Mass-balance deposition fraction at each cell.
+   * For each cell: deposited = influx - outflux (mass that doesn't route onward).
+   * Summed across all release cells. Multiply by snowDepth to get depth estimate.
+   * Based on Christen et al. (2010) mass conservation principle.
+   */
+  deposition: Float32Array;
 }
 
 export interface DrawingVertex {

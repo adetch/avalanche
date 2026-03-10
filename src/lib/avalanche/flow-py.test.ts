@@ -41,6 +41,10 @@ describe("runFlowPy", () => {
       if (result.rMax[i] > 0) cellsWithFlux++;
     }
     expect(cellsWithFlux).toBe(1);
+
+    // All mass deposits at the release cell (nowhere to go)
+    const releaseIdx = 10 * 20 + 10;
+    expect(result.deposition[releaseIdx]).toBeCloseTo(1.0, 5);
   });
 
   it("uniform slope produces downslope flow", () => {
@@ -142,6 +146,55 @@ describe("runFlowPy", () => {
     expect(axisFlux).toBeGreaterThanOrEqual(sideFlux);
   });
 
+  it("deposition conserves mass (total deposition ≈ 1.0 per release cell)", () => {
+    // Steep uniform slope — all mass must deposit somewhere
+    const dem = makeDEM(50, 20, (row) => row * 5);
+    const result = runFlowPy(dem, [[49, 10]], {
+      alphaAngleDeg: 25,
+      exponent: 8,
+      rStop: 3e-4,
+    });
+
+    // Sum all deposition — should equal 1.0 (unit mass from one release cell)
+    let totalDeposition = 0;
+    for (let i = 0; i < result.deposition.length; i++) {
+      totalDeposition += result.deposition[i];
+    }
+    // Allow small floating-point tolerance (mass lost to rStop cutoff)
+    expect(totalDeposition).toBeGreaterThan(0.9);
+    expect(totalDeposition).toBeLessThanOrEqual(1.01);
+  });
+
+  it("deposition concentrates in runout zone, not at release", () => {
+    // Steep slope (row*6 = ~31° slope) → flow should travel far
+    // Deposition should be minimal at release and concentrated where flow stops
+    const dem = makeDEM(80, 20, (row) => row * 6);
+    const result = runFlowPy(dem, [[79, 10]], {
+      alphaAngleDeg: 20,
+      exponent: 8,
+      rStop: 3e-4,
+    });
+
+    const releaseIdx = 79 * 20 + 10;
+    const releaseDeposition = result.deposition[releaseIdx];
+
+    // Find the cell with maximum deposition
+    let maxDeposition = 0;
+    let maxDepRow = 0;
+    for (let i = 0; i < result.deposition.length; i++) {
+      if (result.deposition[i] > maxDeposition) {
+        maxDeposition = result.deposition[i];
+        maxDepRow = Math.floor(i / 20);
+      }
+    }
+
+    // Max deposition should NOT be at the release cell
+    // It should be somewhere downslope (lower row number)
+    expect(maxDepRow).toBeLessThan(79);
+    // Release cell should have very low deposition (most mass routes onward)
+    expect(releaseDeposition).toBeLessThan(maxDeposition);
+  });
+
   it("multiple release cells composite correctly", () => {
     // Steep slope so both paths travel far enough to overlap
     const dem = makeDEM(80, 20, (row) => row * 8);
@@ -173,5 +226,13 @@ describe("runFlowPy", () => {
       if (double.cellCount[i] > 0) doubleCells++;
     }
     expect(doubleCells).toBeGreaterThanOrEqual(singleCells);
+
+    // Two release cells → total deposition should be ≈ 2.0 (additive mass)
+    let totalDep = 0;
+    for (let i = 0; i < double.deposition.length; i++) {
+      totalDep += double.deposition[i];
+    }
+    expect(totalDep).toBeGreaterThan(1.8);
+    expect(totalDep).toBeLessThanOrEqual(2.01);
   });
 });

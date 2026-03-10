@@ -1,8 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef } from "react";
 import { useMap } from "react-map-gl/maplibre";
-import maplibregl from "maplibre-gl";
 import { useAvalancheStore } from "@/store/useAvalancheStore";
 import { gridToLngLat } from "@/lib/geo/virtual-dem";
 import type { FlowPyGridResult } from "@/types";
@@ -73,13 +72,12 @@ function lerp(a: number, b: number, t: number): number {
 /**
  * Generate a canvas image colored by estimated burial depth.
  *
- * rMax is a routing fraction per release cell (0–1). To convert to depth:
- *   depth = snowDepthM × rMax × numReleaseCells
+ * Uses the mass-balance deposition field from Flow-Py routing.
+ * Deposition fraction represents the portion of release mass that stops
+ * at each cell (influx - outflux). Multiply by snow depth to get physical depth.
  *
- * This accounts for the total mass from all release cells accumulating
- * at each grid cell. Where multiple release paths overlap, cellCount > 1
- * and rMax reflects the peak single-source flux — we use cellCount to
- * capture the additional mass from overlapping flows.
+ * Based on Christen et al. (2010) mass conservation principle and
+ * Sovilla et al. (2010) empirical deposition observations.
  */
 function generateHeatmapCanvas(
   result: FlowPyGridResult,
@@ -91,23 +89,16 @@ function generateHeatmapCanvas(
   const ctx = canvas.getContext("2d")!;
   const imageData = ctx.createImageData(result.cols, result.rows);
 
-  // Count release cells (cells where rMax ≈ 1.0)
-  let releaseCellCount = 0;
-  for (let i = 0; i < result.rMax.length; i++) {
-    if (result.rMax[i] >= 0.9) releaseCellCount++;
-  }
-  releaseCellCount = Math.max(releaseCellCount, 1);
-
   for (let r = 0; r < result.rows; r++) {
     for (let c = 0; c < result.cols; c++) {
       const gridIdx = r * result.cols + c;
       const canvasRow = result.rows - 1 - r; // flip: row 0 = south → bottom
       const pixelIdx = (canvasRow * result.cols + c) * 4;
 
-      const flux = result.rMax[gridIdx];
-      const overlap = result.cellCount[gridIdx];
-      // Depth = release depth × flux fraction × number of contributing sources
-      const estimatedDepth = snowDepthM * flux * Math.max(overlap, 1);
+      // Deposition fraction → physical depth
+      // Each release cell contributes unit mass. deposition[i] is the sum
+      // of mass fractions from all release cells that deposited here.
+      const estimatedDepth = snowDepthM * result.deposition[gridIdx];
       const [red, green, blue, alpha] = depthToColor(estimatedDepth);
 
       imageData.data[pixelIdx] = red;
@@ -141,10 +132,10 @@ function buildDemLike(flowPy: FlowPyGridResult) {
 }
 
 /**
- * Convert lng/lat to grid cell and compute estimated burial depth.
- * Returns null if outside the grid or no flow at this cell.
+ * Convert lng/lat to grid cell and compute estimated burial depth from deposition.
+ * Returns null if outside the grid or no deposition at this cell.
  */
-function getDepthAtLngLat(
+export function getDepthAtLngLat(
   flowPy: FlowPyGridResult,
   lng: number,
   lat: number,
@@ -159,11 +150,10 @@ function getDepthAtLngLat(
   if (row < 0 || row >= flowPy.rows || col < 0 || col >= flowPy.cols) return null;
 
   const idx = row * flowPy.cols + col;
-  const flux = flowPy.rMax[idx];
-  if (flux <= 0) return null;
+  const dep = flowPy.deposition[idx];
+  if (dep <= 0) return null;
 
-  const overlap = flowPy.cellCount[idx];
-  return snowDepthM * flux * Math.max(overlap, 1);
+  return snowDepthM * dep;
 }
 
 export default function FlowPyOverlay() {
@@ -171,66 +161,8 @@ export default function FlowPyOverlay() {
   const snowDepth = useAvalancheStore((s) => s.snowDepth);
   const { current: mapRef } = useMap();
   const addedRef = useRef(false);
-  const popupRef = useRef<maplibregl.Popup | null>(null);
 
   const snowDepthM = snowDepth / 100;
-
-  // Hover handler: show burial depth tooltip
-  const onMouseMove = useCallback((e: maplibregl.MapMouseEvent) => {
-    const flowPy = result?.flowPy;
-    if (!flowPy) return;
-
-    const depth = getDepthAtLngLat(flowPy, e.lngLat.lng, e.lngLat.lat, snowDepthM);
-    const map = mapRef?.getMap();
-    if (!map) return;
-
-    if (depth === null || depth < 0.02) {
-      if (popupRef.current) {
-        popupRef.current.remove();
-        popupRef.current = null;
-      }
-      map.getCanvas().style.cursor = "";
-      return;
-    }
-
-    map.getCanvas().style.cursor = "crosshair";
-
-    const depthFt = depth * 3.281;
-    const label = depthFt < 1
-      ? `~${Math.round(depthFt * 12)} in`
-      : `~${depthFt.toFixed(1)} ft`;
-
-    if (!popupRef.current) {
-      popupRef.current = new maplibregl.Popup({
-        closeButton: false,
-        closeOnClick: false,
-        className: "flowpy-tooltip",
-        offset: [0, -10],
-      });
-    }
-
-    popupRef.current
-      .setLngLat(e.lngLat)
-      .setHTML(`<div style="font-size:12px;font-weight:600;padding:2px 4px">Est. burial: ${label}</div>`)
-      .addTo(map);
-  }, [result?.flowPy, snowDepthM, mapRef]);
-
-  // Add/remove mousemove listener
-  useEffect(() => {
-    const map = mapRef?.getMap();
-    if (!map || !result?.flowPy) return;
-
-    map.on("mousemove", onMouseMove);
-
-    return () => {
-      map.off("mousemove", onMouseMove);
-      if (popupRef.current) {
-        popupRef.current.remove();
-        popupRef.current = null;
-      }
-      map.getCanvas().style.cursor = "";
-    };
-  }, [result?.flowPy, onMouseMove, mapRef]);
 
   // Render heatmap image layer
   useEffect(() => {
