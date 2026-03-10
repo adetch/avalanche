@@ -13,10 +13,16 @@ export interface TerrainGradient {
 }
 
 /**
- * Compute the local terrain gradient at a point using central differences.
+ * Compute the local terrain gradient using the full Horn (1981) 3×3 method.
  *
- * Samples elevation at 4 cardinal offsets (N, S, E, W) and computes
- * dz/dx and dz/dy. This is a simplified Horn (1981) method.
+ * Samples all 8 neighbors plus center in a 3×3 grid. Cardinal neighbors
+ * are weighted 2×, diagonals 1×. This captures oblique terrain features
+ * (diagonal ridgelines, angled gullies) that the 4-cardinal method misses.
+ *
+ * Horn, B.K.P. (1981). "Hill shading and the reflectance map."
+ *
+ * dz/dx = ((z_ne + 2*z_e + z_se) - (z_nw + 2*z_w + z_sw)) / (8 * cellsize)
+ * dz/dy = ((z_nw + 2*z_n + z_ne) - (z_sw + 2*z_s + z_se)) / (8 * cellsize)
  *
  * @param sampleRadiusM Distance in meters for the offset samples (default 30m).
  *   Larger values smooth DEM noise; smaller values capture local detail.
@@ -27,34 +33,51 @@ export function computeLocalGradient(
   sampleRadiusM: number = 30
 ): TerrainGradient | null {
   const radiusKm = sampleRadiusM / 1000;
+  const diagKm = radiusKm; // same distance for diagonals (corners of 3×3)
 
-  // Sample 4 cardinal directions
-  const east = turf.destination(lngLat, radiusKm, 90, { units: "kilometers" })
-    .geometry.coordinates as [number, number];
-  const west = turf.destination(lngLat, radiusKm, 270, { units: "kilometers" })
-    .geometry.coordinates as [number, number];
-  const north = turf.destination(lngLat, radiusKm, 0, { units: "kilometers" })
-    .geometry.coordinates as [number, number];
-  const south = turf.destination(lngLat, radiusKm, 180, { units: "kilometers" })
-    .geometry.coordinates as [number, number];
+  // Sample 8 neighbors: N, NE, E, SE, S, SW, W, NW
+  const n  = turf.destination(lngLat, radiusKm, 0,   { units: "kilometers" }).geometry.coordinates as [number, number];
+  const ne = turf.destination(lngLat, diagKm,   45,  { units: "kilometers" }).geometry.coordinates as [number, number];
+  const e  = turf.destination(lngLat, radiusKm, 90,  { units: "kilometers" }).geometry.coordinates as [number, number];
+  const se = turf.destination(lngLat, diagKm,   135, { units: "kilometers" }).geometry.coordinates as [number, number];
+  const s  = turf.destination(lngLat, radiusKm, 180, { units: "kilometers" }).geometry.coordinates as [number, number];
+  const sw = turf.destination(lngLat, diagKm,   225, { units: "kilometers" }).geometry.coordinates as [number, number];
+  const w  = turf.destination(lngLat, radiusKm, 270, { units: "kilometers" }).geometry.coordinates as [number, number];
+  const nw = turf.destination(lngLat, diagKm,   315, { units: "kilometers" }).geometry.coordinates as [number, number];
 
-  const zE = queryElevation(map, east);
-  const zW = queryElevation(map, west);
-  const zN = queryElevation(map, north);
-  const zS = queryElevation(map, south);
+  const zN  = queryElevation(map, n);
+  const zNE = queryElevation(map, ne);
+  const zE  = queryElevation(map, e);
+  const zSE = queryElevation(map, se);
+  const zS  = queryElevation(map, s);
+  const zSW = queryElevation(map, sw);
+  const zW  = queryElevation(map, w);
+  const zNW = queryElevation(map, nw);
 
-  if (zE === null || zW === null || zN === null || zS === null) return null;
+  // Need at least the 4 cardinal samples; diagonals provide refinement
+  if (zN === null || zE === null || zS === null || zW === null) return null;
 
-  const diameter = 2 * sampleRadiusM;
-  const dzdx = (zE - zW) / diameter; // positive = rising eastward
-  const dzdy = (zN - zS) / diameter; // positive = rising northward
+  // Fall back to 4-cardinal if any diagonal is missing
+  if (zNE === null || zSE === null || zSW === null || zNW === null) {
+    const diameter = 2 * sampleRadiusM;
+    const dzdx = (zE - zW) / diameter;
+    const dzdy = (zN - zS) / diameter;
+    const mag = Math.sqrt(dzdx * dzdx + dzdy * dzdy);
+    const slopeDeg = (Math.atan(mag) * 180) / Math.PI;
+    let aspectDeg = (Math.atan2(-dzdx, -dzdy) * 180) / Math.PI;
+    if (aspectDeg < 0) aspectDeg += 360;
+    return { slopeDeg, aspectDeg, dzdx, dzdy };
+  }
+
+  // Full Horn (1981) formula
+  const cellsize = sampleRadiusM; // distance from center to neighbor
+  const dzdx = ((zNE + 2 * zE + zSE) - (zNW + 2 * zW + zSW)) / (8 * cellsize);
+  const dzdy = ((zNW + 2 * zN + zNE) - (zSW + 2 * zS + zSE)) / (8 * cellsize);
 
   const gradientMagnitude = Math.sqrt(dzdx * dzdx + dzdy * dzdy);
   const slopeDeg = (Math.atan(gradientMagnitude) * 180) / Math.PI;
 
   // Aspect = direction of steepest descent (opposite of gradient vector)
-  // atan2(-dzdy, -dzdx) gives angle from east, CCW positive
-  // Convert to compass bearing (from north, CW positive)
   let aspectDeg = (Math.atan2(-dzdx, -dzdy) * 180) / Math.PI;
   if (aspectDeg < 0) aspectDeg += 360;
 
