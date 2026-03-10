@@ -1,6 +1,6 @@
 import type { Map as MaplibreMap } from "maplibre-gl";
-import * as turf from "@turf/turf";
 import { queryElevation } from "./elevation";
+import { offsetPoint } from "./fast-offset";
 
 export interface TerrainGradient {
   /** Slope magnitude in degrees */
@@ -32,18 +32,16 @@ export function computeLocalGradient(
   lngLat: [number, number],
   sampleRadiusM: number = 30
 ): TerrainGradient | null {
-  const radiusKm = sampleRadiusM / 1000;
-  const diagKm = radiusKm; // same distance for diagonals (corners of 3×3)
-
   // Sample 8 neighbors: N, NE, E, SE, S, SW, W, NW
-  const n  = turf.destination(lngLat, radiusKm, 0,   { units: "kilometers" }).geometry.coordinates as [number, number];
-  const ne = turf.destination(lngLat, diagKm,   45,  { units: "kilometers" }).geometry.coordinates as [number, number];
-  const e  = turf.destination(lngLat, radiusKm, 90,  { units: "kilometers" }).geometry.coordinates as [number, number];
-  const se = turf.destination(lngLat, diagKm,   135, { units: "kilometers" }).geometry.coordinates as [number, number];
-  const s  = turf.destination(lngLat, radiusKm, 180, { units: "kilometers" }).geometry.coordinates as [number, number];
-  const sw = turf.destination(lngLat, diagKm,   225, { units: "kilometers" }).geometry.coordinates as [number, number];
-  const w  = turf.destination(lngLat, radiusKm, 270, { units: "kilometers" }).geometry.coordinates as [number, number];
-  const nw = turf.destination(lngLat, diagKm,   315, { units: "kilometers" }).geometry.coordinates as [number, number];
+  // Using fast flat-Earth offset (~5× faster than turf.destination)
+  const n  = offsetPoint(lngLat, sampleRadiusM, 0);
+  const ne = offsetPoint(lngLat, sampleRadiusM, 45);
+  const e  = offsetPoint(lngLat, sampleRadiusM, 90);
+  const se = offsetPoint(lngLat, sampleRadiusM, 135);
+  const s  = offsetPoint(lngLat, sampleRadiusM, 180);
+  const sw = offsetPoint(lngLat, sampleRadiusM, 225);
+  const w  = offsetPoint(lngLat, sampleRadiusM, 270);
+  const nw = offsetPoint(lngLat, sampleRadiusM, 315);
 
   const zN  = queryElevation(map, n);
   const zNE = queryElevation(map, ne);

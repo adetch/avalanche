@@ -66,6 +66,10 @@ export interface PathResult {
   betaAspect: number;
   runoutAspect: number;
   bearingChange: number;
+  /** Profile curvature from quadratic fit (z'', rad/m). Positive=concave, negative=convex */
+  profileCurvature: number | null;
+  /** Vertical range of quadratic profile fit (meters) */
+  profileH0: number | null;
 }
 
 export interface AvalancheResult {

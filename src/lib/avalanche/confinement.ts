@@ -1,6 +1,7 @@
 import type { Map as MaplibreMap } from "maplibre-gl";
 import * as turf from "@turf/turf";
 import { queryElevation } from "@/lib/geo/elevation";
+import { offsetPoint } from "@/lib/geo/fast-offset";
 import type { ElevationPoint } from "@/types";
 
 export type ConfinementClass = "channelized" | "partly-confined" | "open";
@@ -75,10 +76,7 @@ function sampleMaxRise(
 
   for (let i = 1; i <= SAMPLES_PER_SIDE; i++) {
     const dist = stepM * i;
-    const pt = turf.destination(center, dist / 1000, bearing, {
-      units: "kilometers",
-    });
-    const coord = pt.geometry.coordinates as [number, number];
+    const coord = offsetPoint(center, dist, bearing);
     const elev = queryElevation(map, coord);
     if (elev === null) continue;
 

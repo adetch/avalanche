@@ -1,7 +1,7 @@
 import type { Map as MaplibreMap } from "maplibre-gl";
-import * as turf from "@turf/turf";
 import { queryElevation } from "@/lib/geo/elevation";
 import { computeLocalGradient, blendBearings } from "@/lib/geo/gradient";
+import { offsetPoint } from "@/lib/geo/fast-offset";
 import type { ElevationPoint } from "@/types";
 
 /** How much the current gradient is weighted vs previous bearing (momentum) */
@@ -63,11 +63,8 @@ export function extractGradientProfile(
       stepBearing = previousBearing;
     }
 
-    // Take a step
-    const next = turf.destination(currentPos, stepMeters / 1000, stepBearing, {
-      units: "kilometers",
-    });
-    const nextPos = next.geometry.coordinates as [number, number];
+    // Take a step using fast flat-Earth offset
+    const nextPos = offsetPoint(currentPos, stepMeters, stepBearing);
     const nextElev = queryElevation(map, nextPos);
 
     if (nextElev === null) break;

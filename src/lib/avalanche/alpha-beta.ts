@@ -114,6 +114,86 @@ export function computeAlphaConfidence(
 }
 
 /**
+ * Fit a quadratic z = a*s² + b*s + c to the profile using least squares.
+ * Returns { zpp: 2a (second derivative / curvature), H0: vertical range of fit }.
+ *
+ * Used by the extended AvaFrame alpha-beta equation:
+ *   α = k1*β + k2*z'' + k3*H0 + k4
+ *
+ * Positive z'' = concave (bowl), negative = convex (ridge).
+ */
+export function fitQuadraticProfile(
+  profile: ElevationPoint[]
+): { zpp: number; H0: number } | null {
+  const n = profile.length;
+  if (n < 5) return null;
+
+  // Normalize s to [0, 1] for numerical stability
+  const sMax = profile[n - 1].distanceFromCrown;
+  if (sMax <= 0) return null;
+
+  // Least squares: z = a*s² + b*s + c
+  // Normal equations: [S4 S3 S2] [a]   [Sz2]
+  //                   [S3 S2 S1] [b] = [Sz1]
+  //                   [S2 S1 S0] [c]   [Sz0]
+  let S0 = 0, S1 = 0, S2 = 0, S3 = 0, S4 = 0;
+  let Sz0 = 0, Sz1 = 0, Sz2 = 0;
+
+  for (let i = 0; i < n; i++) {
+    const s = profile[i].distanceFromCrown / sMax;
+    const z = profile[i].elevation;
+    const s2 = s * s;
+    S0 += 1;
+    S1 += s;
+    S2 += s2;
+    S3 += s2 * s;
+    S4 += s2 * s2;
+    Sz0 += z;
+    Sz1 += z * s;
+    Sz2 += z * s2;
+  }
+
+  // Solve 3×3 system using Cramer's rule
+  const det =
+    S4 * (S2 * S0 - S1 * S1) -
+    S3 * (S3 * S0 - S1 * S2) +
+    S2 * (S3 * S1 - S2 * S2);
+
+  if (Math.abs(det) < 1e-12) return null;
+
+  const a =
+    (Sz2 * (S2 * S0 - S1 * S1) -
+     S3 * (Sz1 * S0 - S1 * Sz0) +
+     S2 * (Sz1 * S1 - S2 * Sz0)) / det;
+
+  // z'' = 2a, but we need to un-normalize: actual z'' = 2a / sMax²
+  const zpp = (2 * a) / (sMax * sMax);
+
+  // H0: vertical range of the quadratic fit
+  // Evaluate at s=0 and s=1 (crown and end)
+  const b =
+    (S4 * (Sz1 * S0 - S1 * Sz0) -
+     Sz2 * (S3 * S0 - S1 * S2) +
+     S2 * (S3 * Sz0 - Sz1 * S2)) / det;
+  const c =
+    (S4 * (S2 * Sz0 - Sz1 * S1) -
+     S3 * (S3 * Sz0 - Sz1 * S2) +
+     Sz2 * (S3 * S1 - S2 * S2)) / det;
+
+  // Sample the polynomial to find actual range
+  let zMin = Infinity, zMax = -Infinity;
+  for (let i = 0; i <= 20; i++) {
+    const s = i / 20;
+    const z = a * s * s + b * s + c;
+    if (z < zMin) zMin = z;
+    if (z > zMax) zMax = z;
+  }
+  const H0 = zMax - zMin;
+
+  return { zpp, H0 };
+}
+
+/**
  * Find the runout point where the terrain profile crosses
  * the alpha-angle line drawn from the crown point.
  *

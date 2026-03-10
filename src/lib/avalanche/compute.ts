@@ -9,7 +9,7 @@ import type {
   SnowProfile,
   RegionCoefficients,
 } from "@/types";
-import { findHighestPoint } from "@/lib/geo/elevation";
+import { findHighestPoint, clearElevationCache, getElevationCacheStats } from "@/lib/geo/elevation";
 import { computeAverageSlope } from "@/lib/geo/slope";
 import { computeLocalGradient } from "@/lib/geo/gradient";
 import { extractGradientProfile } from "./profile";
@@ -19,6 +19,7 @@ import {
   computeAlphaAngle,
   computeAlphaConfidence,
   findRunoutPoint,
+  fitQuadraticProfile,
   DEFAULT_REGION,
 } from "./alpha-beta";
 import { computeVolume } from "./volume";
@@ -135,6 +136,9 @@ function computeSinglePath(
   let bearingChange = Math.abs(runoutAspect - crownAspect);
   if (bearingChange > 180) bearingChange = 360 - bearingChange;
 
+  // Quadratic profile fit for extended alpha-beta diagnostics
+  const quadFit = fitQuadraticProfile(profile);
+
   return {
     crownPoint,
     betaPoint,
@@ -151,6 +155,8 @@ function computeSinglePath(
     betaAspect,
     runoutAspect,
     bearingChange,
+    profileCurvature: quadFit?.zpp ?? null,
+    profileH0: quadFit?.H0 ?? null,
   };
 }
 
@@ -171,6 +177,7 @@ export function computeAvalanchePath(
   region: RegionCoefficients = DEFAULT_REGION
 ): ComputeResult {
   const t0 = performance.now();
+  clearElevationCache();
 
   // 1. Sample release points within the polygon
   const releasePoints = sampleReleasePoints(map, startingZone, 7);
@@ -272,8 +279,12 @@ export function computeAvalanchePath(
     confinement.bufferMultiplier
   );
   const t2 = performance.now();
+  const cacheStats = getElevationCacheStats();
   console.log(
     `[avalanche] timing: paths=${(t1 - t0).toFixed(0)}ms zones=${(t2 - t1).toFixed(0)}ms total=${(t2 - t0).toFixed(0)}ms`
+  );
+  console.log(
+    `[avalanche] elevation cache: ${cacheStats.size} entries, ${cacheStats.hits} hits, ${cacheStats.misses} misses (${cacheStats.hits + cacheStats.misses > 0 ? ((cacheStats.hits / (cacheStats.hits + cacheStats.misses)) * 100).toFixed(0) : 0}% hit rate)`
   );
   const trackPoly = trackZone ?? startingZone;
   const runoutPoly = runoutZone ?? startingZone;
