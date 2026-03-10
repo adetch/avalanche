@@ -183,6 +183,44 @@ export default function ResultsDisplay() {
         </div>
       )}
 
+      {/* Flow-Py 2D simulation */}
+      {result.flowPy && (
+        <div className="rounded-md bg-zinc-50 px-3 py-2">
+          <div className="text-xs font-medium text-zinc-500 mb-1">
+            2D Flow Simulation (Flow-Py)
+          </div>
+          <div className="space-y-0.5 text-xs font-mono">
+            <div className="flex justify-between text-zinc-700">
+              <span>Grid</span>
+              <span>{result.flowPy.cols}×{result.flowPy.rows} ({result.flowPy.cellSize}m)</span>
+            </div>
+            <div className="flex justify-between text-zinc-700">
+              <span>Cells reached</span>
+              <span>{(() => {
+                let count = 0;
+                for (let i = 0; i < result.flowPy.cellCount.length; i++) {
+                  if (result.flowPy.cellCount[i] > 0) count++;
+                }
+                return count.toLocaleString();
+              })()}</span>
+            </div>
+            <div className="flex justify-between text-zinc-700">
+              <span>Affected area</span>
+              <span>{(() => {
+                let count = 0;
+                for (let i = 0; i < result.flowPy.cellCount.length; i++) {
+                  if (result.flowPy.cellCount[i] > 0) count++;
+                }
+                const areaM2 = count * result.flowPy.cellSize * result.flowPy.cellSize;
+                return areaM2 < 10000
+                  ? `${formatNumber(areaM2)} m²`
+                  : `${(areaM2 / 10000).toFixed(1)} ha`;
+              })()}</span>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Legend */}
       <div>
         <h3 className="mb-2 text-xs font-medium text-zinc-500 uppercase tracking-wide">

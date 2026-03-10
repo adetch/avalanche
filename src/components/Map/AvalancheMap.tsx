@@ -11,6 +11,7 @@ import Map, {
 import { useAvalancheStore } from "@/store/useAvalancheStore";
 import DrawingLayer from "./DrawingLayer";
 import PathOverlay from "./PathOverlay";
+import FlowPyOverlay from "./FlowPyOverlay";
 import * as turf from "@turf/turf";
 import { computeAvalanchePath } from "@/lib/avalanche/compute";
 import { detectRegion } from "@/lib/avalanche/region-detect";
@@ -152,6 +153,7 @@ export default function AvalancheMap() {
         showAccuracyCircle={false}
       />
       <DrawingLayer mapRef={mapRef} />
+      <FlowPyOverlay />
       <PathOverlay />
     </Map>
   );
