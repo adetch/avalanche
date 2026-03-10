@@ -12,12 +12,12 @@ const LAYER_ID = "flowpy-heatmap-layer";
 /**
  * Estimated burial depth thresholds (meters).
  * Based on avalanche rescue statistics:
- * - <0.5m: survivable with self-rescue
- * - 0.5–1.0m: serious, companion rescue critical
- * - 1.0–2.0m: critical burial
+ * - <0.3m: light deposition, self-rescue likely
+ * - 0.3–1.0m: partial burial, companion rescue critical
+ * - 1.0–2.0m: full burial, critical
  * - >2.0m: very deep, low survival probability
  */
-const DEPTH_THRESHOLDS = [0.1, 0.5, 1.0, 2.0]; // meters
+const DEPTH_THRESHOLDS = [0.02, 0.3, 1.0, 2.0]; // meters
 
 /**
  * Color ramp by estimated burial depth (meters).
@@ -71,7 +71,14 @@ function lerp(a: number, b: number, t: number): number {
 
 /**
  * Generate a canvas image colored by estimated burial depth.
- * Burial depth ≈ snowDepthM × rMax (flux fraction of release mass).
+ *
+ * rMax is a routing fraction per release cell (0–1). To convert to depth:
+ *   depth = snowDepthM × rMax × numReleaseCells
+ *
+ * This accounts for the total mass from all release cells accumulating
+ * at each grid cell. Where multiple release paths overlap, cellCount > 1
+ * and rMax reflects the peak single-source flux — we use cellCount to
+ * capture the additional mass from overlapping flows.
  */
 function generateHeatmapCanvas(
   result: FlowPyGridResult,
@@ -83,6 +90,13 @@ function generateHeatmapCanvas(
   const ctx = canvas.getContext("2d")!;
   const imageData = ctx.createImageData(result.cols, result.rows);
 
+  // Count release cells (cells where rMax ≈ 1.0)
+  let releaseCellCount = 0;
+  for (let i = 0; i < result.rMax.length; i++) {
+    if (result.rMax[i] >= 0.9) releaseCellCount++;
+  }
+  releaseCellCount = Math.max(releaseCellCount, 1);
+
   for (let r = 0; r < result.rows; r++) {
     for (let c = 0; c < result.cols; c++) {
       const gridIdx = r * result.cols + c;
@@ -90,7 +104,9 @@ function generateHeatmapCanvas(
       const pixelIdx = (canvasRow * result.cols + c) * 4;
 
       const flux = result.rMax[gridIdx];
-      const estimatedDepth = snowDepthM * flux;
+      const overlap = result.cellCount[gridIdx];
+      // Depth = release depth × flux fraction × number of contributing sources
+      const estimatedDepth = snowDepthM * flux * Math.max(overlap, 1);
       const [red, green, blue, alpha] = depthToColor(estimatedDepth);
 
       imageData.data[pixelIdx] = red;
