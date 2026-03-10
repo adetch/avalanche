@@ -105,6 +105,28 @@ export interface AvalancheResult {
     maxPressure: number;
     dynamicRunout: number;
   } | null;
+  /** Flow-Py 2D simulation result grid */
+  flowPy: FlowPyGridResult | null;
+}
+
+/**
+ * Result grid from the Flow-Py 2D gravitational mass-flow simulation.
+ * D'Amboise et al. (2022), Holmgren (1994) MFD routing with z-delta stopping.
+ */
+export interface FlowPyGridResult {
+  /** Grid origin (SW corner) [lng, lat] */
+  origin: [number, number];
+  /** Cell size in meters */
+  cellSize: number;
+  /** Grid dimensions */
+  cols: number;
+  rows: number;
+  /** Maximum z-delta energy at each cell (flat row-major Float32Array) */
+  zMaxDelta: Float32Array;
+  /** Maximum routing flux at each cell */
+  rMax: Float32Array;
+  /** Count of release cells that reached each cell */
+  cellCount: Uint16Array;
 }
 
 export interface DrawingVertex {
