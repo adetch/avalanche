@@ -23,43 +23,26 @@ export default function PathOverlay() {
     geometry: path.runoutZone,
   };
 
-  // Primary fall-line from crown to runout (truncate at runout distance)
-  const runoutDist = path.runoutPoint.distanceFromCrown;
-  const fallLineCoords = path.profile
-    .filter((p) => p.distanceFromCrown <= runoutDist)
-    .map((p) => p.lngLat);
-  fallLineCoords.push(path.runoutPoint.lngLat);
-  const fallLineData: Feature<LineString> = {
-    type: "Feature",
-    properties: {},
-    geometry: {
-      type: "LineString",
-      coordinates: fallLineCoords,
-    },
-  };
-
-  // Secondary paths from ensemble (all paths except primary)
-  const secondaryLines: FeatureCollection<LineString> = {
+  // All fall-line paths rendered uniformly
+  const allLines: FeatureCollection<LineString> = {
     type: "FeatureCollection",
-    features: allPaths
-      .filter((p) => p !== allPaths[0]) // skip primary (already rendered as white dashed)
-      .map((p) => {
-        const coords = p.profile
-          .filter((pt) => pt.distanceFromCrown <= p.horizontalRunout)
-          .map((pt) => pt.lngLat);
-        coords.push(p.runoutPoint.lngLat);
-        return {
-          type: "Feature" as const,
-          properties: {},
-          geometry: {
-            type: "LineString" as const,
-            coordinates: coords,
-          },
-        };
-      }),
+    features: allPaths.map((p) => {
+      const coords = p.profile
+        .filter((pt) => pt.distanceFromCrown <= p.horizontalRunout)
+        .map((pt) => pt.lngLat);
+      coords.push(p.runoutPoint.lngLat);
+      return {
+        type: "Feature" as const,
+        properties: {},
+        geometry: {
+          type: "LineString" as const,
+          coordinates: coords,
+        },
+      };
+    }),
   };
 
-  // Key points: crown, beta, runout
+  // Key points: crown, beta, runout (from the longest-runout path)
   const pointsData = {
     type: "FeatureCollection" as const,
     features: [
@@ -124,32 +107,16 @@ export default function PathOverlay() {
         />
       </Source>
 
-      {/* Secondary ensemble paths */}
-      {secondaryLines.features.length > 0 && (
-        <Source id="secondary-paths" type="geojson" data={secondaryLines}>
-          <Layer
-            id="secondary-paths-layer"
-            type="line"
-            paint={{
-              "line-color": "#f97316",
-              "line-width": 1.5,
-              "line-opacity": 0.4,
-              "line-dasharray": [2, 2],
-            }}
-          />
-        </Source>
-      )}
-
-      {/* Primary fall-line */}
-      <Source id="fall-line" type="geojson" data={fallLineData}>
+      {/* All ensemble fall-lines — uniform styling */}
+      <Source id="fall-lines" type="geojson" data={allLines}>
         <Layer
-          id="fall-line-layer"
+          id="fall-lines-layer"
           type="line"
           paint={{
             "line-color": "#ffffff",
-            "line-width": 2,
+            "line-width": 1.5,
             "line-dasharray": [3, 3],
-            "line-opacity": 0.7,
+            "line-opacity": 0.6,
           }}
         />
       </Source>
