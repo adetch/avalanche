@@ -10,6 +10,8 @@ import Map, {
 } from "react-map-gl/maplibre";
 import { useAvalancheStore } from "@/store/useAvalancheStore";
 import DrawingLayer from "./DrawingLayer";
+import PathOverlay from "./PathOverlay";
+import { computeAvalanchePath } from "@/lib/avalanche/compute";
 
 const MAPTILER_KEY = process.env.NEXT_PUBLIC_MAPTILER_KEY;
 
@@ -18,6 +20,12 @@ export default function AvalancheMap() {
   const setMapReady = useAvalancheStore((s) => s.setMapReady);
   const flyToTarget = useAvalancheStore((s) => s.flyToTarget);
   const clearFlyTo = useAvalancheStore((s) => s.clearFlyTo);
+  const startingZonePolygon = useAvalancheStore((s) => s.startingZonePolygon);
+  const slopeAngle = useAvalancheStore((s) => s.slopeAngle);
+  const snowDepth = useAvalancheStore((s) => s.snowDepth);
+  const setResult = useAvalancheStore((s) => s.setResult);
+  const setComputing = useAvalancheStore((s) => s.setComputing);
+  const setError = useAvalancheStore((s) => s.setError);
 
   const onMapLoad = useCallback(() => {
     const map = mapRef.current?.getMap();
@@ -63,6 +71,43 @@ export default function AvalancheMap() {
     clearFlyTo();
   }, [flyToTarget, clearFlyTo]);
 
+  // Run computation when polygon or inputs change
+  useEffect(() => {
+    const map = mapRef.current?.getMap();
+    if (!map || !startingZonePolygon) {
+      setResult(null);
+      return;
+    }
+
+    setComputing(true);
+    setError(null);
+
+    // Small delay to ensure terrain tiles are loaded at current view
+    const timer = setTimeout(() => {
+      try {
+        const result = computeAvalanchePath(
+          map,
+          startingZonePolygon,
+          slopeAngle,
+          snowDepth
+        );
+        if (result) {
+          setResult(result);
+        } else {
+          setError(
+            "Could not compute path. Try drawing on steeper terrain or zoom in more."
+          );
+        }
+      } catch {
+        setError("Computation failed. Try a different area.");
+      } finally {
+        setComputing(false);
+      }
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [startingZonePolygon, slopeAngle, snowDepth, setResult, setComputing, setError]);
+
   if (!MAPTILER_KEY) {
     return (
       <div className="flex h-full w-full items-center justify-center bg-zinc-100 text-zinc-500">
@@ -97,6 +142,7 @@ export default function AvalancheMap() {
         showAccuracyCircle={false}
       />
       <DrawingLayer mapRef={mapRef} />
+      <PathOverlay />
     </Map>
   );
 }

@@ -4,6 +4,7 @@ import { useAvalancheStore } from "@/store/useAvalancheStore";
 import LocationSearch from "./LocationSearch";
 import SlopeAngleInput from "./SlopeAngleInput";
 import SnowDepthInput from "./SnowDepthInput";
+import ResultsDisplay from "./ResultsDisplay";
 
 export default function ControlPanel() {
   const drawingMode = useAvalancheStore((s) => s.drawingMode);
@@ -73,6 +74,11 @@ export default function ControlPanel() {
             </p>
           )}
         </div>
+
+        <hr className="border-zinc-200" />
+
+        {/* Results */}
+        <ResultsDisplay />
       </div>
 
       <div className="mt-auto pt-6 text-xs text-zinc-400">
