@@ -13,10 +13,52 @@ const METERS_TO_FEET = 3.28084;
 const SQ_METERS_TO_SQ_FEET = 10.7639;
 const SLOPE_SAMPLE_DIST_M = 30; // sample 30m in each direction for local slope
 
+// Slope color stops: [degrees, [h, s, l]]
+// Interpolated in HSL to avoid muddy gray midpoints
+const SLOPE_COLOR_STOPS: [number, [number, number, number]][] = [
+  [0,  [160, 68, 52]],   // emerald — flat, safe
+  [25, [160, 68, 52]],   // emerald — below slab threshold
+  [28, [49, 96, 53]],    // yellow — transitional
+  [32, [27, 96, 61]],    // orange — prime avalanche terrain
+  [38, [0, 91, 71]],     // red — very active
+  [45, [0, 91, 71]],     // red — peak danger
+  [50, [174, 68, 50]],   // teal — sluffs off, slabs unlikely
+  [60, [174, 68, 50]],   // teal
+];
+
+function lerpHue(h0: number, h1: number, t: number): number {
+  // Take the shortest arc around the hue wheel
+  let diff = h1 - h0;
+  if (diff > 180) diff -= 360;
+  if (diff < -180) diff += 360;
+  return ((h0 + diff * t) % 360 + 360) % 360;
+}
+
+function slopeColor(deg: number): string {
+  if (deg <= SLOPE_COLOR_STOPS[0][0]) {
+    const [h, s, l] = SLOPE_COLOR_STOPS[0][1];
+    return `hsl(${h},${s}%,${l}%)`;
+  }
+  for (let i = 1; i < SLOPE_COLOR_STOPS.length; i++) {
+    const [d0, c0] = SLOPE_COLOR_STOPS[i - 1];
+    const [d1, c1] = SLOPE_COLOR_STOPS[i];
+    if (deg <= d1) {
+      const t = (deg - d0) / (d1 - d0);
+      const h = Math.round(lerpHue(c0[0], c1[0], t));
+      const s = Math.round(c0[1] + (c1[1] - c0[1]) * t);
+      const l = Math.round(c0[2] + (c1[2] - c0[2]) * t);
+      return `hsl(${h},${s}%,${l}%)`;
+    }
+  }
+  const [h, s, l] = SLOPE_COLOR_STOPS[SLOPE_COLOR_STOPS.length - 1][1];
+  return `hsl(${h},${s}%,${l}%)`;
+}
+
 interface CursorInfo {
   lngLat: [number, number];
   distanceFt: number;
   areaSqFt: number | null;
+  slopeDeg: number | null;
 }
 
 interface DrawingLayerProps {
@@ -42,7 +84,7 @@ function computeLocalSlope(
   lngLat: [number, number]
 ): number | null {
   const centerElev = queryElevation(map, lngLat);
-  if (centerElev === null) return null;
+  if (centerElev === null || !Number.isFinite(centerElev)) return null;
 
   let maxSlope = 0;
   for (let bearing = 0; bearing < 360; bearing += 45) {
@@ -51,16 +93,14 @@ function computeLocalSlope(
     });
     const coord = dest.geometry.coordinates as [number, number];
     const elev = queryElevation(map, coord);
-    if (elev === null) continue;
+    if (elev === null || !Number.isFinite(elev)) continue;
 
-    const elevDiff = centerElev - elev; // positive = downhill
-    if (elevDiff > 0) {
-      const angle = (Math.atan2(elevDiff, SLOPE_SAMPLE_DIST_M) * 180) / Math.PI;
-      if (angle > maxSlope) maxSlope = angle;
-    }
+    const elevDiff = Math.abs(centerElev - elev);
+    const angle = (Math.atan2(elevDiff, SLOPE_SAMPLE_DIST_M) * 180) / Math.PI;
+    if (Number.isFinite(angle) && angle > maxSlope) maxSlope = angle;
   }
 
-  return maxSlope > 0 ? maxSlope : null;
+  return maxSlope;
 }
 
 /**
@@ -168,6 +208,10 @@ export default function DrawingLayer({ mapRef }: DrawingLayerProps) {
     const map = mapRef.current?.getMap();
     if (!map) return;
 
+    // Throttle slope queries — only recompute when cursor moves >5px
+    let lastSlopePixel: { x: number; y: number } | null = null;
+    let cachedSlope: number | null = null;
+
     const handleMouseMove = (e: MapMouseEvent) => {
       const state = useAvalancheStore.getState();
       if (!state.drawingMode) {
@@ -193,6 +237,17 @@ export default function DrawingLayer({ mapRef }: DrawingLayerProps) {
         setNearFirstVertex(false);
       }
 
+      // Local slope at cursor — throttled to avoid excessive GPU readbacks
+      let slopeDeg = cachedSlope;
+      if (!lastSlopePixel ||
+        Math.abs(e.point.x - lastSlopePixel.x) > 5 ||
+        Math.abs(e.point.y - lastSlopePixel.y) > 5
+      ) {
+        slopeDeg = computeLocalSlope(map, cursorLngLat);
+        cachedSlope = slopeDeg;
+        lastSlopePixel = { x: e.point.x, y: e.point.y };
+      }
+
       // Distance from last vertex to cursor
       if (state.drawingVertices.length >= 1) {
         const lastVertex =
@@ -210,9 +265,15 @@ export default function DrawingLayer({ mapRef }: DrawingLayerProps) {
           lngLat: cursorLngLat,
           distanceFt: distFt,
           areaSqFt: liveArea,
+          slopeDeg,
         });
       } else {
-        setCursorInfo(null);
+        setCursorInfo({
+          lngLat: cursorLngLat,
+          distanceFt: 0,
+          areaSqFt: null,
+          slopeDeg,
+        });
       }
     };
 
@@ -370,7 +431,23 @@ export default function DrawingLayer({ mapRef }: DrawingLayerProps) {
           offset={[12, -12]}
         >
           <div className="pointer-events-none rounded bg-zinc-900/80 px-2 py-1 text-xs font-mono text-white whitespace-nowrap shadow-lg">
-            <span>{formatDistance(cursorInfo.distanceFt)}</span>
+            <span
+              style={{
+                color: cursorInfo.slopeDeg !== null
+                  ? slopeColor(cursorInfo.slopeDeg)
+                  : "#a1a1aa",
+              }}
+            >
+              {cursorInfo.slopeDeg !== null
+                ? `${Math.round(cursorInfo.slopeDeg)}°`
+                : "—"}
+            </span>
+            {cursorInfo.distanceFt > 0 && (
+              <>
+                <span className="mx-1.5 text-zinc-400">|</span>
+                <span>{formatDistance(cursorInfo.distanceFt)}</span>
+              </>
+            )}
             {cursorInfo.areaSqFt !== null && (
               <>
                 <span className="mx-1.5 text-zinc-400">|</span>

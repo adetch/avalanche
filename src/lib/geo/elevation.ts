@@ -12,6 +12,7 @@ export function queryElevation(
 ): number | null {
   try {
     const elev = map.queryTerrainElevation({ lng: lngLat[0], lat: lngLat[1] });
+    if (elev === null || elev === undefined || !Number.isFinite(elev)) return null;
     return elev;
   } catch {
     return null;
