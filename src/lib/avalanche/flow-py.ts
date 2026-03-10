@@ -93,7 +93,28 @@ export function runFlowPy(
 }
 
 /**
- * Propagate flow from a single release cell using BFS in descending elevation order.
+ * Pre-sort all grid cells by descending elevation.
+ * Returns array of flat indices sorted highest-first.
+ */
+function buildElevationOrder(dem: VirtualDEM): number[] {
+  const { cols, rows } = dem;
+  const indices: number[] = [];
+  for (let i = 0; i < rows * cols; i++) {
+    if (!isNaN(dem.elevation[i])) {
+      indices.push(i);
+    }
+  }
+  indices.sort((a, b) => dem.elevation[b] - dem.elevation[a]);
+  return indices;
+}
+
+/**
+ * Propagate flow from a single release cell.
+ *
+ * Uses the original Flow-Py approach: process ALL grid cells in strict
+ * descending elevation order. This guarantees every parent cell has been
+ * processed before its children, so flux accumulation from multiple
+ * parents is correct without needing a priority queue.
  */
 function propagateSingleRelease(
   dem: VirtualDEM,
@@ -108,67 +129,43 @@ function propagateSingleRelease(
   const { cols, rows } = dem;
   const { exponent, rStop } = params;
 
-  // Per-release-cell local state
-  // zDelta[idx] = max z-delta energy received at this cell from this release
+  // Per-release-cell grids
   const localZDelta = new Float32Array(rows * cols);
   const localR = new Float32Array(rows * cols);
-  // Track the parent direction at each cell for persistence calculation
-  const parentAngle = new Float32Array(rows * cols).fill(-1);
-  const visited = new Uint8Array(rows * cols);
+  // Track incoming flow direction for persistence (weighted sum of parent directions)
+  const flowDirX = new Float32Array(rows * cols); // sum of sin(angle) * weight
+  const flowDirY = new Float32Array(rows * cols); // sum of cos(angle) * weight
 
   const startIdx = startRow * cols + startCol;
   const startElev = getElevation(dem, startRow, startCol);
   if (isNaN(startElev)) return;
 
   // Initialize release cell
-  localZDelta[startIdx] = 0; // starts at zero energy
-  localR[startIdx] = 1.0;    // full flux
-  parentAngle[startIdx] = -1; // no parent direction
+  localZDelta[startIdx] = startElev; // z_delta = elevation above alpha line origin
+  localR[startIdx] = 1.0;
 
-  // BFS queue: [row, col, elevation] sorted by descending elevation
-  // Use a simple queue that we process in elevation order
-  const queue: [number, number][] = [[startRow, startCol]];
-  const inQueue = new Uint8Array(rows * cols);
-  inQueue[startIdx] = 1;
+  // Get cells in descending elevation order
+  const order = buildElevationOrder(dem);
 
-  // Process cells from highest to lowest elevation
-  while (queue.length > 0) {
-    // Find highest-elevation cell in queue (simple scan; adequate for avalanche-scale grids)
-    let bestIdx = 0;
-    let bestElev = -Infinity;
-    for (let q = 0; q < queue.length; q++) {
-      const elev = getElevation(dem, queue[q][0], queue[q][1]);
-      if (elev > bestElev) {
-        bestElev = elev;
-        bestIdx = q;
-      }
-    }
-
-    const [r, c] = queue[bestIdx];
-    queue[bestIdx] = queue[queue.length - 1];
-    queue.pop();
-
-    const idx = r * cols + c;
-    if (visited[idx]) continue;
-    visited[idx] = 1;
-
-    const cellElev = getElevation(dem, r, c);
-    if (isNaN(cellElev)) continue;
-
+  // Process every cell in elevation order
+  for (const idx of order) {
     const cellR = localR[idx];
+    if (cellR < rStop) continue; // no flux here
+
+    const r = Math.floor(idx / cols);
+    const c = idx % cols;
+    const cellElev = dem.elevation[idx];
     const cellZDelta = localZDelta[idx];
-    if (cellR < rStop) continue;
 
     // Composite into output
     if (cellZDelta > outZMaxDelta[idx]) outZMaxDelta[idx] = cellZDelta;
     if (cellR > outRMax[idx]) outRMax[idx] = cellR;
     outCellCount[idx]++;
 
-    // Find downslope neighbors and compute terrain routing
+    // Find downslope neighbors and compute terrain routing weights
     const downslopeNeighbors: {
-      ni: number; // neighbor index in NEIGHBORS array
-      row: number;
-      col: number;
+      ni: number;
+      idx: number;
       tanPhi: number;
       dist: number;
       elev: number;
@@ -182,7 +179,8 @@ function propagateSingleRelease(
       const nc = c + dc;
       if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) continue;
 
-      const nElev = getElevation(dem, nr, nc);
+      const nIdx = nr * cols + nc;
+      const nElev = dem.elevation[nIdx];
       if (isNaN(nElev)) continue;
       if (nElev >= cellElev) continue; // only downslope
 
@@ -194,35 +192,33 @@ function propagateSingleRelease(
       const tanPhiExp = Math.pow(tanPhi, exponent);
       sumTanPhiExp += tanPhiExp;
 
-      downslopeNeighbors.push({ ni, row: nr, col: nc, tanPhi, dist, elev: nElev });
+      downslopeNeighbors.push({ ni, idx: nIdx, tanPhi, dist, elev: nElev });
     }
 
     if (downslopeNeighbors.length === 0 || sumTanPhiExp === 0) continue;
 
-    // Compute persistence weights
-    const hasParent = parentAngle[idx] >= 0;
-    const pAngle = parentAngle[idx];
+    // Compute persistence weights from accumulated flow direction
+    const hasMomentum = flowDirX[idx] !== 0 || flowDirY[idx] !== 0;
+    // Reconstruct incoming flow angle from accumulated direction vector
+    const incomingAngle = hasMomentum
+      ? Math.atan2(flowDirX[idx], flowDirY[idx]) // atan2(sin, cos) → angle in radians
+      : -1;
 
     let sumTP = 0;
     const neighborTP: number[] = [];
 
     for (const n of downslopeNeighbors) {
-      // Terrain routing weight
+      // Terrain routing weight (Holmgren MFD)
       const T = Math.pow(n.tanPhi, exponent) / sumTanPhiExp;
 
       // Persistence weight
       let P = 1.0;
-      if (hasParent) {
-        // Angle of flow from parent to this cell
-        const flowAngle = pAngle;
-        // Angle from this cell to neighbor
+      if (hasMomentum) {
         const neighborAngle = NEIGHBOR_ANGLES[n.ni];
-        // Angular difference (how much this neighbor deviates from the flow direction)
-        let angleDiff = neighborAngle - flowAngle;
+        let angleDiff = neighborAngle - incomingAngle;
         // Normalize to [-PI, PI]
         while (angleDiff > Math.PI) angleDiff -= 2 * Math.PI;
         while (angleDiff < -Math.PI) angleDiff += 2 * Math.PI;
-        // Persistence: cos of deviation, clamped to 0 for backward directions
         P = Math.max(0, Math.cos(angleDiff));
       }
 
@@ -233,33 +229,31 @@ function propagateSingleRelease(
 
     if (sumTP === 0) continue;
 
-    // Route flux and energy to each neighbor
+    // Route flux and energy to each downslope neighbor
     for (let i = 0; i < downslopeNeighbors.length; i++) {
       const n = downslopeNeighbors[i];
-      const nIdx = n.row * cols + n.col;
-
-      // Combined routing fraction
       const fraction = neighborTP[i] / sumTP;
       const nR = cellR * fraction;
 
       if (nR < rStop) continue;
 
-      // Z-delta energy: gain from elevation drop, lose from friction (tan(alpha) × distance)
+      // Z-delta: energy from elevation drop minus friction loss
       const nZDelta = cellZDelta + (cellElev - n.elev) - n.dist * tanAlpha;
 
-      if (nZDelta <= 0) continue; // flow stops
+      if (nZDelta <= 0) continue; // flow stops (below alpha line)
 
-      // Update neighbor if this path gives more energy or flux
-      if (nZDelta > localZDelta[nIdx] || localR[nIdx] === 0) {
-        localZDelta[nIdx] = Math.max(localZDelta[nIdx], nZDelta);
-        localR[nIdx] = Math.max(localR[nIdx], nR);
-        parentAngle[nIdx] = NEIGHBOR_ANGLES[n.ni]; // direction from current cell to neighbor
-
-        if (!inQueue[nIdx] && !visited[nIdx]) {
-          queue.push([n.row, n.col]);
-          inQueue[nIdx] = 1;
-        }
+      // Accumulate into neighbor (multiple parents can contribute)
+      if (nR > localR[n.idx]) {
+        localR[n.idx] = nR; // take max flux from any parent
       }
+      if (nZDelta > localZDelta[n.idx]) {
+        localZDelta[n.idx] = nZDelta; // take max energy from any parent
+      }
+
+      // Accumulate flow direction vector (weighted by flux)
+      const outAngle = NEIGHBOR_ANGLES[n.ni];
+      flowDirX[n.idx] += nR * Math.sin(outAngle);
+      flowDirY[n.idx] += nR * Math.cos(outAngle);
     }
   }
 }
