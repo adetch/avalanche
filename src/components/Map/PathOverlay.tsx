@@ -43,8 +43,8 @@ export default function PathOverlay() {
     }),
   };
 
-  // Key points: crown and beta always shown.
-  // Runout point only shown when Flow-Py is not available (it supersedes it).
+  // Key points: Crown always shown.
+  // Beta and Runout are alpha-beta model concepts — hidden when Flow-Py is active.
   const pointFeatures = [
     {
       type: "Feature" as const,
@@ -54,25 +54,27 @@ export default function PathOverlay() {
         coordinates: path.crownPoint.lngLat,
       },
     },
-    {
-      type: "Feature" as const,
-      properties: { label: "Beta", color: "#F59E0B" },
-      geometry: {
-        type: "Point" as const,
-        coordinates: path.betaPoint.lngLat,
-      },
-    },
   ];
 
   if (!hasFlowPy) {
-    pointFeatures.push({
-      type: "Feature" as const,
-      properties: { label: "Runout", color: "#FBBF24" },
-      geometry: {
-        type: "Point" as const,
-        coordinates: path.runoutPoint.lngLat,
+    pointFeatures.push(
+      {
+        type: "Feature" as const,
+        properties: { label: "Beta", color: "#F59E0B" },
+        geometry: {
+          type: "Point" as const,
+          coordinates: path.betaPoint.lngLat,
+        },
       },
-    });
+      {
+        type: "Feature" as const,
+        properties: { label: "Runout", color: "#FBBF24" },
+        geometry: {
+          type: "Point" as const,
+          coordinates: path.runoutPoint.lngLat,
+        },
+      }
+    );
   }
 
   const pointsData = {
@@ -117,19 +119,21 @@ export default function PathOverlay() {
         </>
       )}
 
-      {/* All ensemble fall-lines — always shown */}
-      <Source id="fall-lines" type="geojson" data={allLines}>
-        <Layer
-          id="fall-lines-layer"
-          type="line"
-          paint={{
-            "line-color": "#ffffff",
-            "line-width": 1.5,
-            "line-dasharray": [3, 3],
-            "line-opacity": 0.6,
-          }}
-        />
-      </Source>
+      {/* Ensemble fall-lines — hidden when Flow-Py heatmap is active */}
+      {!hasFlowPy && (
+        <Source id="fall-lines" type="geojson" data={allLines}>
+          <Layer
+            id="fall-lines-layer"
+            type="line"
+            paint={{
+              "line-color": "#ffffff",
+              "line-width": 1.5,
+              "line-dasharray": [3, 3],
+              "line-opacity": 0.6,
+            }}
+          />
+        </Source>
+      )}
 
       {/* Key points */}
       <Source id="key-points" type="geojson" data={pointsData}>

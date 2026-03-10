@@ -12,6 +12,9 @@ const LAYER_ID = "flowpy-heatmap-layer";
 /**
  * Color ramp for Flow-Py flux values (log-scaled).
  * Returns [r, g, b, a] in 0-255 range.
+ *
+ * Yellow (low flux / fringe) → Orange (moderate) → Red (high / core flow)
+ * Mirrors standard avalanche hazard mapping conventions.
  */
 function fluxToColor(rMax: number, rStop: number): [number, number, number, number] {
   if (rMax <= 0) return [0, 0, 0, 0];
@@ -22,38 +25,22 @@ function fluxToColor(rMax: number, rStop: number): [number, number, number, numb
   const logVal = Math.log10(Math.max(rMax, rStop));
   const t = Math.max(0, Math.min(1, (logVal - logMin) / (logMax - logMin)));
 
-  // 5-stop color ramp: blue → teal → yellow → orange → red
-  if (t < 0.25) {
-    const s = t / 0.25;
+  // 3-stop ramp: yellow → orange → red
+  if (t < 0.5) {
+    const s = t / 0.5;
     return [
-      lerp(66, 65, s),
-      lerp(133, 182, s),
-      lerp(244, 196, s),
-      lerp(80, 120, s),
-    ];
-  } else if (t < 0.5) {
-    const s = (t - 0.25) / 0.25;
-    return [
-      lerp(65, 254, s),
-      lerp(182, 204, s),
-      lerp(196, 92, s),
-      lerp(120, 160, s),
-    ];
-  } else if (t < 0.75) {
-    const s = (t - 0.5) / 0.25;
-    return [
-      lerp(254, 253, s),
-      lerp(204, 141, s),
-      lerp(92, 60, s),
-      lerp(160, 190, s),
+      lerp(254, 245, s),  // R
+      lerp(217, 152, s),  // G
+      lerp(118, 36, s),   // B
+      lerp(90, 170, s),   // A
     ];
   } else {
-    const s = (t - 0.75) / 0.25;
+    const s = (t - 0.5) / 0.5;
     return [
-      lerp(253, 200, s),
-      lerp(141, 30, s),
-      lerp(60, 30, s),
-      lerp(190, 220, s),
+      lerp(245, 180, s),  // R
+      lerp(152, 20, s),   // G
+      lerp(36, 20, s),    // B
+      lerp(170, 220, s),  // A
     ];
   }
 }
