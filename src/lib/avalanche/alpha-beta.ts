@@ -3,6 +3,8 @@ import { computeSlopeAngle } from "@/lib/geo/slope";
 
 const BETA_SLOPE_THRESHOLD = 10; // degrees
 const BETA_WINDOW_SIZE = 3; // consecutive points below threshold needed
+/** Minimum distance (m) slope must remain below threshold (AvaFrame dsMin) */
+const BETA_MIN_PERSIST_M = 30;
 
 /**
  * Regional coefficient sets for the alpha-beta model.
@@ -39,7 +41,11 @@ export interface AlphaConfidence {
 
 /**
  * Find the beta point: where local slope drops below 10 degrees
- * for BETA_WINDOW_SIZE consecutive points (avoids DEM noise false positives).
+ * and remains below for at least BETA_MIN_PERSIST_M (30m).
+ *
+ * Uses both a point count check (BETA_WINDOW_SIZE) and a distance
+ * persistence check (dsMin=30m, per AvaFrame com2AB) to avoid
+ * false positives from DEM noise or brief slope transitions.
  */
 export function findBetaPoint(
   profile: ElevationPoint[]
@@ -55,7 +61,13 @@ export function findBetaPoint(
       if (belowCount === 0) firstBelowIdx = i;
       belowCount++;
       if (belowCount >= BETA_WINDOW_SIZE) {
-        return profile[firstBelowIdx];
+        // AvaFrame stability check: slope must persist below threshold
+        // for at least dsMin distance
+        const persistDist =
+          profile[i].distanceFromCrown - profile[firstBelowIdx].distanceFromCrown;
+        if (persistDist >= BETA_MIN_PERSIST_M) {
+          return profile[firstBelowIdx];
+        }
       }
     } else {
       belowCount = 0;
