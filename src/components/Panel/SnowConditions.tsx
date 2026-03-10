@@ -56,10 +56,15 @@ export default function SnowConditions() {
             </option>
           ))}
         </select>
-        <div className="mt-1 text-xs text-zinc-400">
-          Runout coefficients calibrated from observed avalanche paths in this
-          region. Different mountain ranges have different terrain geometry that
-          affects how far avalanches travel.
+        <div className="mt-1 space-y-1">
+          <div className="flex gap-3 text-xs text-zinc-400">
+            <span>α = {region.a}β {region.b >= 0 ? "+" : ""}{region.b}</span>
+            <span>σ = {region.sigma}°</span>
+          </div>
+          <div className="text-xs text-zinc-400">
+            Runout model calibrated from observed paths. Captures regional
+            terrain geometry and snowpack climate (maritime vs continental).
+          </div>
         </div>
       </div>
     </div>
