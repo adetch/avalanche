@@ -26,6 +26,13 @@ export default function SlopeAngleInput() {
         <span>20°</span>
         <span>60°</span>
       </div>
+      {(slopeAngle < 25 || slopeAngle > 55) && (
+        <p className="mt-1 text-xs text-amber-600">
+          {slopeAngle < 25
+            ? "Slopes under 25° rarely produce avalanches."
+            : "Slopes over 55° tend to sluff frequently rather than build slabs."}
+        </p>
+      )}
     </div>
   );
 }

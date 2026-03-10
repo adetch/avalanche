@@ -5,6 +5,7 @@ import LocationSearch from "./LocationSearch";
 import SlopeAngleInput from "./SlopeAngleInput";
 import SnowDepthInput from "./SnowDepthInput";
 import ResultsDisplay from "./ResultsDisplay";
+import ElevationProfile from "@/components/Map/ElevationProfile";
 
 export default function ControlPanel() {
   const drawingMode = useAvalancheStore((s) => s.drawingMode);
@@ -14,7 +15,7 @@ export default function ControlPanel() {
   const flyTo = useAvalancheStore((s) => s.flyTo);
 
   return (
-    <div className="flex h-full w-80 shrink-0 flex-col border-r border-zinc-200 bg-white p-6 overflow-y-auto">
+    <div className="flex h-full w-full shrink-0 flex-col border-t border-zinc-200 bg-white p-4 overflow-y-auto md:w-80 md:border-r md:border-t-0 md:p-6">
       <h1 className="text-lg font-semibold text-zinc-900">
         Avalanche Path Estimator
       </h1>
@@ -79,6 +80,9 @@ export default function ControlPanel() {
 
         {/* Results */}
         <ResultsDisplay />
+
+        {/* Elevation profile */}
+        <ElevationProfile />
       </div>
 
       <div className="mt-auto pt-6 text-xs text-zinc-400">
