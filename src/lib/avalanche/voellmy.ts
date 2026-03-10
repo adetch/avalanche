@@ -134,7 +134,7 @@ export function runVoellmy1D(
   // Final pass: compute max velocity and pressure at each point from the
   // time-integrated result. Since we only track final state, re-run a
   // steady-state velocity estimate at each point using the energy balance.
-  const steadyVelocity = computeSteadyStateVelocity(profile, slopes, mu, xi, releaseDepthM);
+  const steadyVelocity = computeSteadyStateVelocity(profile, slopes, mu, xi, releaseDepthM, snowProfile.entrainmentFactor);
   const pressureArr = steadyVelocity.map((v) => 0.5 * density * v * v / 1000); // Pa → kPa
 
   // Find dynamic runout: last point with meaningful velocity
@@ -170,24 +170,71 @@ export function runVoellmy1D(
  *
  * Below the equilibrium slope angle (where friction exceeds gravity),
  * velocity decays based on available kinetic energy.
+ *
+ * Path-varying entrainment: flow depth grows in the track zone (slope > 10°)
+ * as the avalanche erodes and incorporates snow from the snowpack. In the
+ * runout zone (slope < 10°), entrainment stops and deposition begins.
+ * Based on Sovilla et al. (2006) entrainment model.
  */
 function computeSteadyStateVelocity(
   profile: ElevationPoint[],
   slopes: number[],
   mu: number,
   xi: number,
-  flowDepthM: number
+  flowDepthM: number,
+  entrainmentFactor: number
 ): number[] {
   const n = profile.length;
   const v = new Array(n).fill(0);
 
   // Track kinetic energy (0.5 * v²) along the path
   let kineticEnergy = 0;
+  let currentDepth = flowDepthM;
+
+  // Entrainment rate: how much depth grows per meter of travel in the track zone.
+  // Total growth = entrainmentFactor × releaseDepth over the full track.
+  // We distribute this proportionally per step.
+  const trackSlopeThreshold = (10 * Math.PI) / 180; // 10° in radians
+
+  // Estimate track length (distance where slope > 10°) for rate normalization
+  let trackLength = 0;
+  for (let i = 1; i < n; i++) {
+    if (slopes[i] > trackSlopeThreshold) {
+      trackLength +=
+        profile[i].distanceFromCrown - profile[i - 1].distanceFromCrown;
+    }
+  }
+
+  // Entrainment rate: total additional depth divided over track length
+  // (entrainmentFactor - 1) because factor=1 means no extra snow picked up
+  const extraDepth = flowDepthM * Math.max(entrainmentFactor - 1, 0);
+  const entrainmentRate = trackLength > 0 ? extraDepth / trackLength : 0;
+
+  // Deposition rate in runout zone: lose depth gradually
+  let runoutLength = 0;
+  for (let i = 1; i < n; i++) {
+    if (slopes[i] <= trackSlopeThreshold) {
+      runoutLength +=
+        profile[i].distanceFromCrown - profile[i - 1].distanceFromCrown;
+    }
+  }
+  // Deposit enough to halve the flow depth over the runout zone
+  const depositionRate =
+    runoutLength > 0 ? (currentDepth * 0.5) / runoutLength : 0;
 
   for (let i = 1; i < n; i++) {
     const ds =
       profile[i].distanceFromCrown - profile[i - 1].distanceFromCrown;
     if (ds <= 0) continue;
+
+    // Path-varying entrainment
+    if (slopes[i] > trackSlopeThreshold) {
+      // Track zone: erode and incorporate snow
+      currentDepth += entrainmentRate * ds;
+    } else {
+      // Runout zone: gradual deposition
+      currentDepth = Math.max(currentDepth - depositionRate * ds, flowDepthM * 0.3);
+    }
 
     const sinTheta = Math.sin(slopes[i]);
     const cosTheta = Math.cos(slopes[i]);
@@ -195,7 +242,7 @@ function computeSteadyStateVelocity(
     // Net force per unit mass along the slope
     const vPrev = Math.sqrt(2 * Math.max(kineticEnergy, 0));
     const turbDrag =
-      flowDepthM > 0.01 ? (G * vPrev * vPrev) / (xi * flowDepthM) : 0;
+      currentDepth > 0.01 ? (G * vPrev * vPrev) / (xi * currentDepth) : 0;
     const netAccel = G * sinTheta - mu * G * cosTheta - turbDrag;
 
     // Update kinetic energy: ΔKE = force · distance
