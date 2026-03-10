@@ -10,6 +10,7 @@ export default function PathOverlay() {
   if (!result) return null;
 
   const { path, allPaths } = result;
+  const hasFlowPy = result.flowPy !== null;
 
   const trackData: Feature<Polygon> = {
     type: "Feature",
@@ -42,72 +43,81 @@ export default function PathOverlay() {
     }),
   };
 
-  // Key points: crown, beta, runout (from the longest-runout path)
+  // Key points: crown and beta always shown.
+  // Runout point only shown when Flow-Py is not available (it supersedes it).
+  const pointFeatures = [
+    {
+      type: "Feature" as const,
+      properties: { label: "Crown", color: "#DC2626" },
+      geometry: {
+        type: "Point" as const,
+        coordinates: path.crownPoint.lngLat,
+      },
+    },
+    {
+      type: "Feature" as const,
+      properties: { label: "Beta", color: "#F59E0B" },
+      geometry: {
+        type: "Point" as const,
+        coordinates: path.betaPoint.lngLat,
+      },
+    },
+  ];
+
+  if (!hasFlowPy) {
+    pointFeatures.push({
+      type: "Feature" as const,
+      properties: { label: "Runout", color: "#FBBF24" },
+      geometry: {
+        type: "Point" as const,
+        coordinates: path.runoutPoint.lngLat,
+      },
+    });
+  }
+
   const pointsData = {
     type: "FeatureCollection" as const,
-    features: [
-      {
-        type: "Feature" as const,
-        properties: { label: "Crown", color: "#DC2626" },
-        geometry: {
-          type: "Point" as const,
-          coordinates: path.crownPoint.lngLat,
-        },
-      },
-      {
-        type: "Feature" as const,
-        properties: { label: "Beta", color: "#F59E0B" },
-        geometry: {
-          type: "Point" as const,
-          coordinates: path.betaPoint.lngLat,
-        },
-      },
-      {
-        type: "Feature" as const,
-        properties: { label: "Runout", color: "#FBBF24" },
-        geometry: {
-          type: "Point" as const,
-          coordinates: path.runoutPoint.lngLat,
-        },
-      },
-    ],
+    features: pointFeatures,
   };
 
   return (
     <>
-      {/* Track zone */}
-      <Source id="track-zone" type="geojson" data={trackData}>
-        <Layer
-          id="track-zone-fill"
-          type="fill"
-          paint={{ "fill-color": "#F59E0B", "fill-opacity": 0.35 }}
-        />
-        <Layer
-          id="track-zone-outline"
-          type="line"
-          paint={{ "line-color": "#F59E0B", "line-width": 1.5 }}
-        />
-      </Source>
+      {/* Track and runout zones — only shown when Flow-Py heatmap is not available */}
+      {!hasFlowPy && (
+        <>
+          <Source id="track-zone" type="geojson" data={trackData}>
+            <Layer
+              id="track-zone-fill"
+              type="fill"
+              paint={{ "fill-color": "#F59E0B", "fill-opacity": 0.35 }}
+            />
+            <Layer
+              id="track-zone-outline"
+              type="line"
+              paint={{ "line-color": "#F59E0B", "line-width": 1.5 }}
+            />
+          </Source>
 
-      {/* Runout zone */}
-      <Source id="runout-zone" type="geojson" data={runoutData}>
-        <Layer
-          id="runout-zone-fill"
-          type="fill"
-          paint={{ "fill-color": "#FBBF24", "fill-opacity": 0.25 }}
-        />
-        <Layer
-          id="runout-zone-outline"
-          type="line"
-          paint={{
-            "line-color": "#FBBF24",
-            "line-width": 1.5,
-            "line-dasharray": [4, 2],
-          }}
-        />
-      </Source>
+          <Source id="runout-zone" type="geojson" data={runoutData}>
+            <Layer
+              id="runout-zone-fill"
+              type="fill"
+              paint={{ "fill-color": "#FBBF24", "fill-opacity": 0.25 }}
+            />
+            <Layer
+              id="runout-zone-outline"
+              type="line"
+              paint={{
+                "line-color": "#FBBF24",
+                "line-width": 1.5,
+                "line-dasharray": [4, 2],
+              }}
+            />
+          </Source>
+        </>
+      )}
 
-      {/* All ensemble fall-lines — uniform styling */}
+      {/* All ensemble fall-lines — always shown */}
       <Source id="fall-lines" type="geojson" data={allLines}>
         <Layer
           id="fall-lines-layer"

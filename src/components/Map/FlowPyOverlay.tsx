@@ -155,8 +155,8 @@ export default function FlowPyOverlay() {
         coordinates,
       });
 
-      // Insert below the track zone fill layer if it exists, otherwise just add
-      const beforeLayer = map.getLayer("track-zone-fill") ? "track-zone-fill" : undefined;
+      // Insert below the fall-lines layer if it exists, so heatmap is behind path lines
+      const beforeLayer = map.getLayer("fall-lines-layer") ? "fall-lines-layer" : undefined;
 
       map.addLayer(
         {
