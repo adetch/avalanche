@@ -85,6 +85,35 @@ export default function ResultsDisplay() {
         )}
       </div>
 
+      {/* Profile shape diagnostics */}
+      {primaryPath?.profileCurvature !== null && primaryPath?.profileCurvature !== undefined && (
+        <div className="rounded-md bg-zinc-50 px-3 py-2">
+          <div className="text-xs font-medium text-zinc-500 mb-1">
+            Profile Shape
+          </div>
+          <div className="space-y-0.5 text-xs font-mono">
+            <div className="flex justify-between text-zinc-700">
+              <span title="Second derivative of quadratic fit (z''). Positive = concave (bowl), negative = convex (ridge)">
+                Curvature (z&Prime;)
+              </span>
+              <span>
+                {(primaryPath.profileCurvature * 1e6).toFixed(1)} ×10⁻⁶ /m
+                {" "}
+                <span className="text-zinc-400">
+                  {primaryPath.profileCurvature > 0.5e-6 ? "concave" : primaryPath.profileCurvature < -0.5e-6 ? "convex" : "linear"}
+                </span>
+              </span>
+            </div>
+            {primaryPath.profileH0 !== null && (
+              <div className="flex justify-between text-zinc-700">
+                <span title="Vertical range of the quadratic profile fit">H₀</span>
+                <span>{formatNumber(primaryPath.profileH0)} m</span>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Confidence bands */}
       {alphaConf && (
         <div className="rounded-md bg-zinc-50 px-3 py-2">
