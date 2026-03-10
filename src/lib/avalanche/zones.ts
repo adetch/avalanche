@@ -1,5 +1,5 @@
 import * as turf from "@turf/turf";
-import type { Polygon } from "geojson";
+import type { Polygon, MultiPolygon, Feature } from "geojson";
 import type { ElevationPoint } from "@/types";
 import type { PathResult } from "@/types";
 
@@ -25,138 +25,133 @@ export function findProfileIndex(
 }
 
 /**
- * Build a zone polygon from the envelope of multiple path profiles.
- *
- * The alpha-beta model is strictly 1D (fall-line runout distance only) and
- * has no lateral component.  Rather than fake 2D zones with ad-hoc cross-
- * slope heuristics, we use the multi-path ensemble to define lateral extent:
- *
- * - Collect all profile coordinates from all paths within the given
- *   distance range (crown→beta for track, beta→runout for runout).
- * - Compute the convex hull of those points.
- * - Apply a small buffer to smooth the polygon.
- *
- * Where paths converge (confined terrain), the hull is narrow.
- * Where paths diverge (open slopes), the hull is wide.
- * Lateral extent emerges naturally from the ensemble — no invented parameters.
+ * Extract the largest Polygon from a geometry that may be Polygon or MultiPolygon.
  */
-function buildEnvelopeZone(
-  allPaths: PathResult[],
-  minDist: number,
-  maxDist: number,
-  bufferM: number = 30
+function extractLargestPolygon(
+  geom: Polygon | MultiPolygon
 ): Polygon | null {
-  const coords: [number, number][] = [];
-
-  for (const path of allPaths) {
-    for (const pt of path.profile) {
-      if (pt.distanceFromCrown >= minDist && pt.distanceFromCrown <= maxDist) {
-        coords.push(pt.lngLat);
-      }
+  if (geom.type === "Polygon") return geom;
+  let largest: Polygon | null = null;
+  let largestArea = 0;
+  for (const polyCoords of geom.coordinates) {
+    const poly: Polygon = { type: "Polygon", coordinates: polyCoords };
+    const a = turf.area(poly);
+    if (a > largestArea) {
+      largestArea = a;
+      largest = poly;
     }
   }
-
-  if (coords.length < 3) return null;
-
-  const points = turf.featureCollection(
-    coords.map((c) => turf.point(c))
-  );
-  const hull = turf.convex(points);
-  if (!hull) return null;
-
-  // Small buffer to smooth jagged edges from discrete sample points
-  const buffered = turf.buffer(hull, bufferM / 1000, {
-    units: "kilometers",
-    steps: 8,
-  });
-  if (!buffered) return hull.geometry as Polygon;
-
-  const geom = buffered.geometry;
-  if (geom.type === "MultiPolygon") {
-    // Take the largest polygon
-    let largest: Polygon | null = null;
-    let largestArea = 0;
-    for (const polyCoords of geom.coordinates) {
-      const poly: Polygon = { type: "Polygon", coordinates: polyCoords };
-      const a = turf.area(poly);
-      if (a > largestArea) {
-        largestArea = a;
-        largest = poly;
-      }
-    }
-    return largest;
-  }
-
-  return geom as Polygon;
+  return largest;
 }
 
 /**
- * Build a simple buffered zone for a single path segment.
- * Used as fallback when there's only one path in the ensemble.
+ * Buffer a path segment (slice of profile points) into a polygon.
  */
-function buildSinglePathZone(
+function bufferPathSegment(
   profile: ElevationPoint[],
   startIdx: number,
   endIdx: number,
   bufferM: number
-): Polygon | null {
+): Feature<Polygon | MultiPolygon> | null {
   const slice = profile.slice(startIdx, endIdx + 1);
   if (slice.length < 2) return null;
 
   const coords = slice.map((p) => p.lngLat);
   const line = turf.lineString(coords);
-  const buffered = turf.buffer(line, bufferM / 1000, {
+  return turf.buffer(line, bufferM / 1000, {
     units: "kilometers",
     steps: 8,
-  });
-  if (!buffered) return null;
+  }) ?? null;
+}
 
-  const geom = buffered.geometry;
-  if (geom.type === "MultiPolygon") {
-    let largest: Polygon | null = null;
-    let largestArea = 0;
-    for (const polyCoords of geom.coordinates) {
-      const poly: Polygon = { type: "Polygon", coordinates: polyCoords };
-      const a = turf.area(poly);
-      if (a > largestArea) {
-        largestArea = a;
-        largest = poly;
-      }
+/**
+ * Build a zone polygon by buffering each path individually then unioning.
+ *
+ * This avoids the convex-hull problem where paths on different sides of a
+ * ridge create a zone that bridges across terrain the avalanche would never
+ * cross.  Each path gets its own buffer that hugs its fall line; the union
+ * merges paths that overlap (same gully) while keeping separate paths that
+ * diverge onto different aspects.
+ */
+function buildUnionedZone(
+  allPaths: PathResult[],
+  minDist: number,
+  maxDist: number,
+  bufferM: number
+): Polygon | null {
+  const buffered: Feature<Polygon | MultiPolygon>[] = [];
+
+  for (const path of allPaths) {
+    // Find profile indices within the distance range
+    let startIdx = -1;
+    let endIdx = -1;
+    for (let i = 0; i < path.profile.length; i++) {
+      const d = path.profile[i].distanceFromCrown;
+      if (d >= minDist && startIdx === -1) startIdx = i;
+      if (d <= maxDist) endIdx = i;
     }
-    return largest;
+    if (startIdx === -1 || endIdx === -1 || endIdx <= startIdx) continue;
+
+    const buf = bufferPathSegment(path.profile, startIdx, endIdx, bufferM);
+    if (buf) buffered.push(buf);
   }
 
-  return geom as Polygon;
+  if (buffered.length === 0) return null;
+  if (buffered.length === 1) {
+    return extractLargestPolygon(buffered[0].geometry);
+  }
+
+  // Union all individual buffers
+  let merged = buffered[0];
+  for (let i = 1; i < buffered.length; i++) {
+    try {
+      const u = turf.union(
+        turf.featureCollection([merged as Feature<Polygon | MultiPolygon>, buffered[i] as Feature<Polygon | MultiPolygon>])
+      );
+      if (u) merged = u as Feature<Polygon | MultiPolygon>;
+    } catch {
+      // Union can fail on degenerate geometries — skip this path
+    }
+  }
+
+  return extractLargestPolygon(merged.geometry);
+}
+
+/**
+ * Filter paths to those whose initial bearing is within maxDeviation degrees
+ * of the primary path. Prevents wildly divergent paths from inflating zones.
+ */
+function filterCoherentPaths(
+  allPaths: PathResult[],
+  primary: PathResult,
+  maxDeviation: number = 45
+): PathResult[] {
+  const primaryBearing = primary.fallLineAzimuth;
+  return allPaths.filter((p) => {
+    let diff = Math.abs(p.fallLineAzimuth - primaryBearing);
+    if (diff > 180) diff = 360 - diff;
+    return diff <= maxDeviation;
+  });
 }
 
 /**
  * Generate track and runout zone polygons from the path ensemble.
  *
- * With multiple paths: zones are the convex hull of all profile points
- * in the relevant distance range, giving terrain-aware lateral extent.
- *
- * With a single path: falls back to a modest buffer (~30m track, ~50m runout).
+ * Each path is individually buffered then unioned together.  Paths on
+ * the same aspect merge into one zone; paths on different aspects stay
+ * separate (no bridging across ridges).  Paths diverging >45° from the
+ * primary are excluded from zone generation to prevent unnatural bulging.
  */
 export function generateZones(
   allPaths: PathResult[],
   primary: PathResult
 ): { trackZone: Polygon | null; runoutZone: Polygon | null } {
+  const coherentPaths = filterCoherentPaths(allPaths, primary, 45);
   const betaDist = primary.betaPoint.distanceFromCrown;
   const runoutDist = primary.runoutPoint.distanceFromCrown;
 
-  if (allPaths.length >= 2) {
-    // Multi-path: use the envelope of all paths
-    const trackZone = buildEnvelopeZone(allPaths, 0, betaDist, 30);
-    const runoutZone = buildEnvelopeZone(allPaths, betaDist, runoutDist, 50);
-    return { trackZone, runoutZone };
-  }
+  const trackZone = buildUnionedZone(coherentPaths, 0, betaDist, 30);
+  const runoutZone = buildUnionedZone(coherentPaths, betaDist, runoutDist, 50);
 
-  // Single path: modest fixed buffer
-  const betaIdx = findProfileIndex(primary.profile, primary.betaPoint);
-  const runoutIdx = findProfileIndex(primary.profile, primary.runoutPoint);
-  const trackStart = Math.min(5, betaIdx);
-
-  const trackZone = buildSinglePathZone(primary.profile, trackStart, betaIdx, 30);
-  const runoutZone = buildSinglePathZone(primary.profile, betaIdx, runoutIdx, 50);
   return { trackZone, runoutZone };
 }

@@ -27,7 +27,13 @@ export default function ResultsDisplay() {
 
   if (!result) return null;
 
-  const { path } = result;
+  const { path, allPaths } = result;
+
+  // Get confidence bands from the primary path
+  const primaryPath = allPaths.find(
+    (p) => p.horizontalRunout === result.horizontalRunout
+  );
+  const alphaConf = primaryPath?.alphaConfidence;
 
   return (
     <div className="space-y-4">
@@ -43,6 +49,10 @@ export default function ResultsDisplay() {
           value={`${formatNumber(result.volume)} m³`}
         />
         <Stat
+          label="Mass"
+          value={`${formatNumber(result.mass)} t`}
+        />
+        <Stat
           label="Runout"
           value={`${formatNumber(result.horizontalRunout)} m`}
         />
@@ -56,7 +66,59 @@ export default function ResultsDisplay() {
         />
         <Stat label="Alpha" value={`${path.alphaAngle.toFixed(1)}°`} />
         <Stat label="Beta" value={`${path.betaAngle.toFixed(1)}°`} />
+        {result.pathCount > 1 && (
+          <Stat
+            label="Paths"
+            value={`${result.pathCount}`}
+          />
+        )}
       </div>
+
+      {/* Confidence bands */}
+      {alphaConf && (
+        <div className="rounded-md bg-zinc-50 px-3 py-2">
+          <div className="text-xs font-medium text-zinc-500 mb-1">
+            Runout Confidence
+          </div>
+          <div className="space-y-0.5 text-xs font-mono">
+            <div className="flex justify-between text-zinc-500">
+              <span>Short (α+1σ)</span>
+              <span>{alphaConf.high.toFixed(1)}°</span>
+            </div>
+            <div className="flex justify-between text-zinc-800 font-semibold">
+              <span>Mean (α)</span>
+              <span>{alphaConf.mid.toFixed(1)}°</span>
+            </div>
+            <div className="flex justify-between text-red-600">
+              <span>Long (α−1σ)</span>
+              <span>{alphaConf.low.toFixed(1)}°</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Runout range across paths */}
+      {result.pathCount > 1 && (
+        <div className="rounded-md bg-zinc-50 px-3 py-2">
+          <div className="text-xs font-medium text-zinc-500 mb-1">
+            Runout Range (Ensemble)
+          </div>
+          <div className="space-y-0.5 text-xs font-mono">
+            <div className="flex justify-between text-zinc-500">
+              <span>Min</span>
+              <span>{formatNumber(result.runoutRange.min)} m</span>
+            </div>
+            <div className="flex justify-between text-zinc-800 font-semibold">
+              <span>Median</span>
+              <span>{formatNumber(result.runoutRange.median)} m</span>
+            </div>
+            <div className="flex justify-between text-red-600">
+              <span>Max</span>
+              <span>{formatNumber(result.runoutRange.max)} m</span>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Legend */}
       <div>

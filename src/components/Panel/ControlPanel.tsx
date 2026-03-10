@@ -4,6 +4,7 @@ import { useAvalancheStore } from "@/store/useAvalancheStore";
 import LocationSearch from "./LocationSearch";
 import SlopeAngleInput from "./SlopeAngleInput";
 import SnowDepthInput from "./SnowDepthInput";
+import SnowConditions from "./SnowConditions";
 import ResultsDisplay from "./ResultsDisplay";
 import ElevationProfile from "@/components/Map/ElevationProfile";
 
@@ -34,6 +35,7 @@ export default function ControlPanel() {
         {/* Slope & snow inputs */}
         <SlopeAngleInput />
         <SnowDepthInput />
+        <SnowConditions />
 
         <hr className="border-zinc-200" />
 
