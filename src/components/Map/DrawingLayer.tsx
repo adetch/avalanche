@@ -1,13 +1,98 @@
 "use client";
 
-import { useEffect } from "react";
-import type { MapMouseEvent } from "maplibre-gl";
-import { Source, Layer, type MapRef } from "react-map-gl/maplibre";
+import { useEffect, useState, useCallback } from "react";
+import type { Map as MaplibreMap, MapMouseEvent } from "maplibre-gl";
+import { Source, Layer, Marker, type MapRef } from "react-map-gl/maplibre";
+import * as turf from "@turf/turf";
 import { useAvalancheStore } from "@/store/useAvalancheStore";
+import { queryElevation } from "@/lib/geo/elevation";
 import type { Feature, Polygon, LineString, Point } from "geojson";
+
+const CLOSE_THRESHOLD_PX = 15;
+const METERS_TO_FEET = 3.28084;
+const SQ_METERS_TO_SQ_FEET = 10.7639;
+const SLOPE_SAMPLE_DIST_M = 30; // sample 30m in each direction for local slope
+
+interface CursorInfo {
+  lngLat: [number, number];
+  distanceFt: number;
+  areaSqFt: number | null;
+}
 
 interface DrawingLayerProps {
   mapRef: React.RefObject<MapRef | null>;
+}
+
+function formatDistance(feet: number): string {
+  if (feet < 1000) return `${Math.round(feet)} ft`;
+  return `${(feet / 5280).toFixed(2)} mi`;
+}
+
+function formatArea(sqFt: number): string {
+  if (sqFt < 43560) return `${Math.round(sqFt).toLocaleString()} ft²`;
+  return `${(sqFt / 43560).toFixed(2)} acres`;
+}
+
+/**
+ * Compute the steepest local slope at a point by sampling elevation
+ * in 8 compass directions and returning the max slope angle.
+ */
+function computeLocalSlope(
+  map: MaplibreMap,
+  lngLat: [number, number]
+): number | null {
+  const centerElev = queryElevation(map, lngLat);
+  if (centerElev === null) return null;
+
+  let maxSlope = 0;
+  for (let bearing = 0; bearing < 360; bearing += 45) {
+    const dest = turf.destination(lngLat, SLOPE_SAMPLE_DIST_M / 1000, bearing, {
+      units: "kilometers",
+    });
+    const coord = dest.geometry.coordinates as [number, number];
+    const elev = queryElevation(map, coord);
+    if (elev === null) continue;
+
+    const elevDiff = centerElev - elev; // positive = downhill
+    if (elevDiff > 0) {
+      const angle = (Math.atan2(elevDiff, SLOPE_SAMPLE_DIST_M) * 180) / Math.PI;
+      if (angle > maxSlope) maxSlope = angle;
+    }
+  }
+
+  return maxSlope > 0 ? maxSlope : null;
+}
+
+/**
+ * Compute average terrain slope across multiple vertices by sampling
+ * the local slope at each vertex and averaging.
+ */
+function computeAverageSlopeAcrossVertices(
+  map: MaplibreMap,
+  vertices: { lngLat: [number, number] }[]
+): number | null {
+  const slopes: number[] = [];
+  for (const v of vertices) {
+    const s = computeLocalSlope(map, v.lngLat);
+    if (s !== null) slopes.push(s);
+  }
+  if (slopes.length === 0) return null;
+  return slopes.reduce((a, b) => a + b, 0) / slopes.length;
+}
+
+/**
+ * Compute area of a polygon formed by vertices + an optional cursor point.
+ * Returns area in square feet, or null if < 3 points.
+ */
+function computePolygonArea(
+  vertices: [number, number][],
+  cursorLngLat?: [number, number]
+): number | null {
+  const allPts = cursorLngLat ? [...vertices, cursorLngLat] : vertices;
+  if (allPts.length < 3) return null;
+  const coords = [...allPts, allPts[0]]; // close ring
+  const poly = turf.polygon([coords]);
+  return turf.area(poly) * SQ_METERS_TO_SQ_FEET;
 }
 
 export default function DrawingLayer({ mapRef }: DrawingLayerProps) {
@@ -16,50 +101,145 @@ export default function DrawingLayer({ mapRef }: DrawingLayerProps) {
   const startingZonePolygon = useAvalancheStore((s) => s.startingZonePolygon);
   const addDrawingVertex = useAvalancheStore((s) => s.addDrawingVertex);
   const finishDrawing = useAvalancheStore((s) => s.finishDrawing);
+  const setSlopeAngle = useAvalancheStore((s) => s.setSlopeAngle);
+  const [nearFirstVertex, setNearFirstVertex] = useState(false);
+  const [cursorInfo, setCursorInfo] = useState<CursorInfo | null>(null);
 
-  // Handle map clicks for drawing
+  // Update slope from DEM when vertices are placed
+  const updateSlopeFromVertices = useCallback(
+    (vertices: { lngLat: [number, number] }[]) => {
+      const map = mapRef.current?.getMap();
+      if (!map || vertices.length < 1) return;
+
+      const slope = computeAverageSlopeAcrossVertices(map, vertices);
+      if (slope !== null) {
+        setSlopeAngle(Math.round(slope));
+      }
+    },
+    [mapRef, setSlopeAngle]
+  );
+
+  // Handle map clicks for drawing + proximity close
   useEffect(() => {
     const map = mapRef.current?.getMap();
     if (!map) return;
 
     const handleClick = (e: MapMouseEvent) => {
-      if (!useAvalancheStore.getState().drawingMode) return;
-      addDrawingVertex({ lngLat: [e.lngLat.lng, e.lngLat.lat] });
-    };
-
-    const handleDblClick = (e: MapMouseEvent) => {
-      if (!useAvalancheStore.getState().drawingMode) return;
-      e.preventDefault();
-      // Double-click fires click first, adding a duplicate vertex.
-      // Remove it before finalizing the polygon.
       const state = useAvalancheStore.getState();
-      if (state.drawingVertices.length > 0) {
-        useAvalancheStore.setState({
-          drawingVertices: state.drawingVertices.slice(0, -1),
+      if (!state.drawingMode) return;
+
+      // If we have 3+ vertices and cursor is near the first vertex, close
+      if (state.drawingVertices.length >= 3) {
+        const firstLngLat = state.drawingVertices[0].lngLat;
+        const firstPixel = map.project({
+          lng: firstLngLat[0],
+          lat: firstLngLat[1],
         });
+        const clickPixel = e.point;
+        const dx = firstPixel.x - clickPixel.x;
+        const dy = firstPixel.y - clickPixel.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < CLOSE_THRESHOLD_PX) {
+          finishDrawing();
+          setCursorInfo(null);
+          return;
+        }
       }
-      finishDrawing();
+
+      const newVertex = {
+        lngLat: [e.lngLat.lng, e.lngLat.lat] as [number, number],
+      };
+      addDrawingVertex(newVertex);
+
+      // Update slope — includes the new vertex
+      const updatedVertices = [...state.drawingVertices, newVertex];
+      updateSlopeFromVertices(updatedVertices);
     };
 
     map.on("click", handleClick);
-    map.on("dblclick", handleDblClick);
 
     return () => {
       map.off("click", handleClick);
-      map.off("dblclick", handleDblClick);
     };
-  }, [mapRef, addDrawingVertex, finishDrawing]);
+  }, [mapRef, addDrawingVertex, finishDrawing, updateSlopeFromVertices]);
 
-  // Change cursor when in drawing mode
+  // Track mouse: proximity to first vertex, distance from last vertex, live area
+  useEffect(() => {
+    const map = mapRef.current?.getMap();
+    if (!map) return;
+
+    const handleMouseMove = (e: MapMouseEvent) => {
+      const state = useAvalancheStore.getState();
+      if (!state.drawingMode) {
+        setNearFirstVertex(false);
+        setCursorInfo(null);
+        return;
+      }
+
+      const cursorLngLat: [number, number] = [e.lngLat.lng, e.lngLat.lat];
+
+      // Proximity to first vertex
+      if (state.drawingVertices.length >= 3) {
+        const firstLngLat = state.drawingVertices[0].lngLat;
+        const firstPixel = map.project({
+          lng: firstLngLat[0],
+          lat: firstLngLat[1],
+        });
+        const dx = firstPixel.x - e.point.x;
+        const dy = firstPixel.y - e.point.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        setNearFirstVertex(dist < CLOSE_THRESHOLD_PX);
+      } else {
+        setNearFirstVertex(false);
+      }
+
+      // Distance from last vertex to cursor
+      if (state.drawingVertices.length >= 1) {
+        const lastVertex =
+          state.drawingVertices[state.drawingVertices.length - 1];
+        const from = turf.point(lastVertex.lngLat);
+        const to = turf.point(cursorLngLat);
+        const distKm = turf.distance(from, to, { units: "kilometers" });
+        const distFt = distKm * 1000 * METERS_TO_FEET;
+
+        // Live area: existing vertices + cursor as tentative next point
+        const vertexCoords = state.drawingVertices.map((v) => v.lngLat);
+        const liveArea = computePolygonArea(vertexCoords, cursorLngLat);
+
+        setCursorInfo({
+          lngLat: cursorLngLat,
+          distanceFt: distFt,
+          areaSqFt: liveArea,
+        });
+      } else {
+        setCursorInfo(null);
+      }
+    };
+
+    map.on("mousemove", handleMouseMove);
+    return () => {
+      map.off("mousemove", handleMouseMove);
+      setNearFirstVertex(false);
+      setCursorInfo(null);
+    };
+  }, [mapRef]);
+
+  // Change cursor based on drawing state
   useEffect(() => {
     const map = mapRef.current?.getMap();
     if (!map) return;
     const canvas = map.getCanvas();
-    canvas.style.cursor = drawingMode ? "crosshair" : "";
+    if (!drawingMode) {
+      canvas.style.cursor = "";
+    } else if (nearFirstVertex) {
+      canvas.style.cursor = "pointer";
+    } else {
+      canvas.style.cursor = "crosshair";
+    }
     return () => {
       canvas.style.cursor = "";
     };
-  }, [drawingMode, mapRef]);
+  }, [drawingMode, nearFirstVertex, mapRef]);
 
   // Build GeoJSON for in-progress drawing
   const vertexCoords = drawingVertices.map((v) => v.lngLat);
@@ -91,9 +271,9 @@ export default function DrawingLayer({ mapRef }: DrawingLayerProps) {
   const pointsData = {
     type: "FeatureCollection" as const,
     features: vertexCoords.map(
-      (coord): Feature<Point> => ({
+      (coord, i): Feature<Point> => ({
         type: "Feature",
-        properties: {},
+        properties: { isFirst: i === 0 && vertexCoords.length >= 3 },
         geometry: { type: "Point", coordinates: coord },
       })
     ),
@@ -155,20 +335,50 @@ export default function DrawingLayer({ mapRef }: DrawingLayerProps) {
         </Source>
       )}
 
-      {/* Drawing vertices */}
+      {/* Drawing vertices — first vertex gets larger ring when closeable */}
       {pointsData.features.length > 0 && (
         <Source id="drawing-points" type="geojson" data={pointsData}>
           <Layer
             id="drawing-points-layer"
             type="circle"
             paint={{
-              "circle-radius": 5,
-              "circle-color": "#ffffff",
+              "circle-radius": [
+                "case",
+                ["get", "isFirst"],
+                nearFirstVertex ? 8 : 7,
+                5,
+              ],
+              "circle-color": [
+                "case",
+                ["get", "isFirst"],
+                "#DC2626",
+                "#ffffff",
+              ],
               "circle-stroke-color": "#DC2626",
               "circle-stroke-width": 2,
             }}
           />
         </Source>
+      )}
+
+      {/* Cursor label: distance + live area */}
+      {drawingMode && cursorInfo && (
+        <Marker
+          longitude={cursorInfo.lngLat[0]}
+          latitude={cursorInfo.lngLat[1]}
+          anchor="bottom-left"
+          offset={[12, -12]}
+        >
+          <div className="pointer-events-none rounded bg-zinc-900/80 px-2 py-1 text-xs font-mono text-white whitespace-nowrap shadow-lg">
+            <span>{formatDistance(cursorInfo.distanceFt)}</span>
+            {cursorInfo.areaSqFt !== null && (
+              <>
+                <span className="mx-1.5 text-zinc-400">|</span>
+                <span>{formatArea(cursorInfo.areaSqFt)}</span>
+              </>
+            )}
+          </div>
+        </Marker>
       )}
     </>
   );

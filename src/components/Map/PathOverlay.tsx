@@ -23,13 +23,18 @@ export default function PathOverlay() {
     geometry: path.runoutZone,
   };
 
-  // Fall-line from crown to runout
+  // Fall-line from crown to runout (truncate at runout distance)
+  const runoutDist = path.runoutPoint.distanceFromCrown;
+  const fallLineCoords = path.profile
+    .filter((p) => p.distanceFromCrown <= runoutDist)
+    .map((p) => p.lngLat);
+  fallLineCoords.push(path.runoutPoint.lngLat);
   const fallLineData: Feature<LineString> = {
     type: "Feature",
     properties: {},
     geometry: {
       type: "LineString",
-      coordinates: path.profile.map((p) => p.lngLat),
+      coordinates: fallLineCoords,
     },
   };
 

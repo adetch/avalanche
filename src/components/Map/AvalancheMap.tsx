@@ -11,7 +11,9 @@ import Map, {
 import { useAvalancheStore } from "@/store/useAvalancheStore";
 import DrawingLayer from "./DrawingLayer";
 import PathOverlay from "./PathOverlay";
+import * as turf from "@turf/turf";
 import { computeAvalanchePath } from "@/lib/avalanche/compute";
+import { logStartingZone, logAvalanchePath, logComputationFailed } from "@/lib/logger";
 
 const MAPTILER_KEY = process.env.NEXT_PUBLIC_MAPTILER_KEY;
 
@@ -21,8 +23,8 @@ export default function AvalancheMap() {
   const flyToTarget = useAvalancheStore((s) => s.flyToTarget);
   const clearFlyTo = useAvalancheStore((s) => s.clearFlyTo);
   const startingZonePolygon = useAvalancheStore((s) => s.startingZonePolygon);
-  const slopeAngle = useAvalancheStore((s) => s.slopeAngle);
   const snowDepth = useAvalancheStore((s) => s.snowDepth);
+  const setSlopeAngle = useAvalancheStore((s) => s.setSlopeAngle);
   const setResult = useAvalancheStore((s) => s.setResult);
   const setComputing = useAvalancheStore((s) => s.setComputing);
   const setError = useAvalancheStore((s) => s.setError);
@@ -41,25 +43,7 @@ export default function AvalancheMap() {
     setMapReady(true);
   }, [setMapReady]);
 
-  // Request geolocation on mount and fly to user's location
-  useEffect(() => {
-    if (!navigator.geolocation) return;
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        mapRef.current?.flyTo({
-          center: [pos.coords.longitude, pos.coords.latitude],
-          zoom: 12,
-          pitch: 50,
-          duration: 2000,
-        });
-      },
-      () => {
-        // Denied or unavailable — stay at default view
-      }
-    );
-  }, []);
-
-  // Respond to flyTo requests from the store (e.g. address search)
+  // Respond to flyTo requests from the store (e.g. address search, "Use my location")
   useEffect(() => {
     if (!flyToTarget) return;
     mapRef.current?.flyTo({
@@ -84,21 +68,29 @@ export default function AvalancheMap() {
 
     // Small delay to ensure terrain tiles are loaded at current view
     const timer = setTimeout(() => {
+      const center = turf.center(startingZonePolygon).geometry.coordinates as [number, number];
+      const area = turf.area(startingZonePolygon);
+
       try {
-        const result = computeAvalanchePath(
+        const outcome = computeAvalanchePath(
           map,
           startingZonePolygon,
-          slopeAngle,
+          0, // slope angle is now computed from DEM
           snowDepth
         );
-        if (result) {
-          setResult(result);
+        if (outcome.ok) {
+          setResult(outcome.result);
+          setSlopeAngle(Math.round(outcome.result.computedSlopeAngle));
+          logStartingZone(outcome.result.computedSlopeAngle, area);
+          logAvalanchePath(outcome.result);
         } else {
-          setError(
-            "Could not compute path. Try drawing on steeper terrain or zoom in more."
-          );
+          const { failure } = outcome;
+          logComputationFailed(failure.step, failure.reason, center, area, failure.details);
+          setError(failure.reason);
         }
-      } catch {
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "unknown_error";
+        logComputationFailed("exception", msg, center, area);
         setError("Computation failed. Try a different area.");
       } finally {
         setComputing(false);
@@ -106,7 +98,7 @@ export default function AvalancheMap() {
     }, 500);
 
     return () => clearTimeout(timer);
-  }, [startingZonePolygon, slopeAngle, snowDepth, setResult, setComputing, setError]);
+  }, [startingZonePolygon, snowDepth, setResult, setComputing, setError, setSlopeAngle]);
 
   if (!MAPTILER_KEY) {
     return (
@@ -123,8 +115,8 @@ export default function AvalancheMap() {
       ref={mapRef}
       mapLib={maplibregl}
       initialViewState={{
-        longitude: 7.66,
-        latitude: 46.55,
+        longitude: -120.1833,
+        latitude: 39.328,
         zoom: 12,
         pitch: 50,
         bearing: -20,
@@ -134,7 +126,7 @@ export default function AvalancheMap() {
       onLoad={onMapLoad}
       maxPitch={85}
     >
-      <NavigationControl position="top-right" />
+      <NavigationControl position="top-right" visualizePitch showCompass />
       <GeolocateControl
         position="top-right"
         trackUserLocation

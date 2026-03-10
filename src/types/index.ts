@@ -21,6 +21,7 @@ export interface AvalanchePath {
 
 export interface AvalancheResult {
   path: AvalanchePath;
+  computedSlopeAngle: number;
   volume: number;
   destructiveSize: 1 | 2 | 3 | 4 | 5;
   horizontalRunout: number;

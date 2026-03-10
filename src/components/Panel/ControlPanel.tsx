@@ -70,8 +70,8 @@ export default function ControlPanel() {
 
           {drawingMode && (
             <p className="text-xs text-zinc-500">
-              Click on the map to place vertices. Double-click to close the
-              polygon (minimum 3 points).
+              Click to place vertices. After 3+ points, click near the first
+              point to close the polygon.
             </p>
           )}
         </div>
