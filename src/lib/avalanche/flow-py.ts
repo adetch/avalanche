@@ -65,7 +65,9 @@ const NEIGHBOR_ANGLES: number[] = [
 export function runFlowPy(
   dem: VirtualDEM,
   releaseCells: [number, number][],
-  params: FlowPyParams = DEFAULT_FLOW_PY_PARAMS
+  params: FlowPyParams = DEFAULT_FLOW_PY_PARAMS,
+  /** Mass multiplier from snow entrainment along the track (Sovilla et al. 2006). 1.0 = no entrainment. */
+  entrainmentFactor: number = 1.0
 ): FlowPyGridResult {
   const { cols, rows } = dem;
   const totalCells = rows * cols;
@@ -79,8 +81,16 @@ export function runFlowPy(
 
   const tanAlpha = Math.tan((params.alphaAngleDeg * Math.PI) / 180);
 
+  // Compute per-cell entrainment rate from the overall factor.
+  // Model: mass grows exponentially through steep cells (track zone).
+  // (1 + rate)^N = entrainmentFactor, where N = estimated steep cells on path.
+  // Estimate N from grid: typical path traverses ~50% of rows.
+  const entrainmentRate = entrainmentFactor > 1
+    ? Math.pow(entrainmentFactor, 1 / Math.max(rows * 0.5, 10)) - 1
+    : 0;
+
   for (const [startRow, startCol] of releaseCells) {
-    propagateSingleRelease(dem, startRow, startCol, params, tanAlpha, zMaxDelta, rMax, cellCount, deposition);
+    propagateSingleRelease(dem, startRow, startCol, params, tanAlpha, entrainmentRate, zMaxDelta, rMax, cellCount, deposition);
   }
 
   return {
@@ -119,12 +129,16 @@ function buildElevationOrder(dem: VirtualDEM): number[] {
  * processed before its children, so flux accumulation from multiple
  * parents is correct without needing a priority queue.
  */
+// Minimum slope for entrainment to occur (~15°, typical track zone threshold)
+const ENTRAIN_SLOPE_TAN = Math.tan(15 * Math.PI / 180);
+
 function propagateSingleRelease(
   dem: VirtualDEM,
   startRow: number,
   startCol: number,
   params: FlowPyParams,
   tanAlpha: number,
+  entrainmentRate: number,
   outZMaxDelta: Float32Array,
   outRMax: Float32Array,
   outCellCount: Uint16Array,
@@ -172,7 +186,7 @@ function propagateSingleRelease(
     const c = idx % cols;
     const cellElev = dem.elevation[idx];
     const cellZDelta = localZDelta[idx];
-    const cellMass = massIn[idx];
+    let cellMass = massIn[idx];
 
     // Composite into output (R-max, z-delta-max, cell count)
     if (cellZDelta > outZMaxDelta[idx]) outZMaxDelta[idx] = cellZDelta;
@@ -216,6 +230,20 @@ function propagateSingleRelease(
       // No downslope neighbors — all mass deposits here
       outDeposition[idx] += cellMass;
       continue;
+    }
+
+    // Slope-dependent entrainment (Sovilla et al. 2006):
+    // On steep track slopes, the avalanche erodes additional snow from the surface.
+    // Mass grows as it travels through the track zone, then deposits in the runout.
+    if (entrainmentRate > 0 && cellMass > 0) {
+      let maxTanPhi = 0;
+      for (const n of downslopeNeighbors) {
+        if (n.tanPhi > maxTanPhi) maxTanPhi = n.tanPhi;
+      }
+      if (maxTanPhi > ENTRAIN_SLOPE_TAN) {
+        const entrained = cellMass * entrainmentRate;
+        cellMass += entrained;
+      }
     }
 
     // Compute persistence weights from accumulated flow direction

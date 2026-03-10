@@ -340,7 +340,7 @@ export function computeAvalanchePath(
           alphaAngleDeg: conservativeAlpha,
           exponent: 8,
           rStop: 3e-4,
-        });
+        }, snowProfile.entrainmentFactor);
         const reachedCells = flowPyResult.cellCount.reduce((sum, c) => sum + (c > 0 ? 1 : 0), 0);
         const t4 = performance.now();
         console.log(

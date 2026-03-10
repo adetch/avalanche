@@ -165,6 +165,39 @@ describe("runFlowPy", () => {
     expect(totalDeposition).toBeLessThanOrEqual(1.01);
   });
 
+  it("entrainment increases total deposited mass", () => {
+    // Steep slope (>15°) so entrainment occurs along the track
+    const dem = makeDEM(60, 20, (row) => row * 6);
+
+    const noEntrain = runFlowPy(dem, [[59, 10]], {
+      alphaAngleDeg: 20,
+      exponent: 8,
+      rStop: 3e-4,
+    }, 1.0); // no entrainment
+
+    const withEntrain = runFlowPy(dem, [[59, 10]], {
+      alphaAngleDeg: 20,
+      exponent: 8,
+      rStop: 3e-4,
+    }, 2.5); // 2.5× entrainment
+
+    let totalNoEntrain = 0;
+    let totalWithEntrain = 0;
+    for (let i = 0; i < noEntrain.deposition.length; i++) {
+      totalNoEntrain += noEntrain.deposition[i];
+      totalWithEntrain += withEntrain.deposition[i];
+    }
+
+    // Without entrainment: ~1.0
+    expect(totalNoEntrain).toBeGreaterThan(0.9);
+    expect(totalNoEntrain).toBeLessThanOrEqual(1.01);
+
+    // With 2.5× entrainment: total should be significantly more than 1.0
+    expect(totalWithEntrain).toBeGreaterThan(totalNoEntrain * 1.5);
+    // But shouldn't exceed a reasonable upper bound
+    expect(totalWithEntrain).toBeLessThan(totalNoEntrain * 4);
+  });
+
   it("deposition concentrates in runout zone, not at release", () => {
     // Steep slope (row*6 = ~31° slope) → flow should travel far
     // Deposition should be minimal at release and concentrated where flow stops
