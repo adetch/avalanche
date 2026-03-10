@@ -141,17 +141,23 @@ function filterCoherentPaths(
  * the same aspect merge into one zone; paths on different aspects stay
  * separate (no bridging across ridges).  Paths diverging >45° from the
  * primary are excluded from zone generation to prevent unnatural bulging.
+ *
+ * @param confinementMultiplier - Scales buffer width based on terrain
+ *   confinement: 1.0 for channelized (gully), 1.5 partly confined, 2.0 open.
  */
 export function generateZones(
   allPaths: PathResult[],
-  primary: PathResult
+  primary: PathResult,
+  confinementMultiplier: number = 1.0
 ): { trackZone: Polygon | null; runoutZone: Polygon | null } {
   const coherentPaths = filterCoherentPaths(allPaths, primary, 45);
   const betaDist = primary.betaPoint.distanceFromCrown;
   const runoutDist = primary.runoutPoint.distanceFromCrown;
 
-  const trackZone = buildUnionedZone(coherentPaths, 0, betaDist, 30);
-  const runoutZone = buildUnionedZone(coherentPaths, betaDist, runoutDist, 50);
+  const trackBuffer = 30 * confinementMultiplier;
+  const runoutBuffer = 50 * confinementMultiplier;
+  const trackZone = buildUnionedZone(coherentPaths, 0, betaDist, trackBuffer);
+  const runoutZone = buildUnionedZone(coherentPaths, betaDist, runoutDist, runoutBuffer);
 
   return { trackZone, runoutZone };
 }

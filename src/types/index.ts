@@ -16,8 +16,8 @@ export interface SnowProfile {
   label: string;
   density: number;           // kg/m³
   entrainmentFactor: number; // multiplier on initial volume
-  frictionMu: number;        // Coulomb friction (for future Voellmy model)
-  frictionXi: number;        // turbulent friction m/s² (for future Voellmy model)
+  frictionMu: number;        // Coulomb friction (Voellmy model)
+  frictionXi: number;        // turbulent friction m/s² (Voellmy model)
 }
 
 /**
@@ -93,6 +93,14 @@ export interface AvalancheResult {
   pathCount: number;
   /** Runout distance range across all paths */
   runoutRange: { min: number; median: number; max: number };
+  /** Path confinement classification */
+  confinement: "channelized" | "partly-confined" | "open";
+  /** Voellmy dynamic model results (velocity, pressure, dynamic runout) */
+  voellmy: {
+    maxVelocity: number;
+    maxPressure: number;
+    dynamicRunout: number;
+  } | null;
 }
 
 export interface DrawingVertex {

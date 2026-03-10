@@ -30,6 +30,8 @@ import {
 import { sampleReleasePoints } from "./release-points";
 import type { ReleasePoint } from "./release-points";
 import { DEFAULT_SNOW_PROFILE } from "./snow-profiles";
+import { estimatePathConfinement } from "./confinement";
+import { runVoellmy1D } from "./voellmy";
 
 export interface ComputeFailure {
   reason: string;
@@ -253,8 +255,22 @@ export function computeAvalanchePath(
   allPaths.sort((a, b) => b.horizontalRunout - a.horizontalRunout);
   const primary = allPaths[0];
 
-  // 4. Generate zone geometries from the path ensemble
-  const { trackZone, runoutZone } = generateZones(allPaths, primary);
+  // 4. Detect path confinement (affects zone widths)
+  const confinement = estimatePathConfinement(
+    map,
+    primary.profile,
+    primary.betaPoint.distanceFromCrown
+  );
+  console.log(
+    `[avalanche] confinement: ${confinement.classification} (×${confinement.bufferMultiplier.toFixed(1)}) L=${confinement.leftRise.toFixed(0)}m R=${confinement.rightRise.toFixed(0)}m`
+  );
+
+  // 5. Generate zone geometries from the path ensemble (using confinement)
+  const { trackZone, runoutZone } = generateZones(
+    allPaths,
+    primary,
+    confinement.bufferMultiplier
+  );
   const t2 = performance.now();
   console.log(
     `[avalanche] timing: paths=${(t1 - t0).toFixed(0)}ms zones=${(t2 - t1).toFixed(0)}ms total=${(t2 - t0).toFixed(0)}ms`
@@ -262,7 +278,7 @@ export function computeAvalanchePath(
   const trackPoly = trackZone ?? startingZone;
   const runoutPoly = runoutZone ?? startingZone;
 
-  // 5. Compute volume, mass, and destructive size
+  // 6. Compute volume, mass, and destructive size
   const areaSqMeters = turf.area(startingZone);
   const slopeRad = (primary.slopeAngle * Math.PI) / 180;
   const slopeAreaFactor = 1 / Math.cos(slopeRad);
@@ -271,13 +287,24 @@ export function computeAvalanchePath(
   const massTonnes = (volume * snowProfile.density) / 1000; // kg → tonnes
   const destructiveSize = classifyDestructiveSize(massTonnes);
 
-  // 6. Track length
+  // 7. Voellmy dynamic model
+  const snowDepthM = snowDepthCm / 100;
+  const voellmyResult = runVoellmy1D(
+    primary.profile,
+    snowProfile,
+    snowDepthM
+  );
+  console.log(
+    `[avalanche] voellmy: vMax=${voellmyResult.maxVelocity.toFixed(1)}m/s pMax=${voellmyResult.maxPressure.toFixed(0)}kPa dynRunout=${voellmyResult.dynamicRunout.toFixed(0)}m`
+  );
+
+  // 8. Track length
   const trackLength = Math.sqrt(
     primary.horizontalRunout * primary.horizontalRunout +
       primary.verticalDrop * primary.verticalDrop
   );
 
-  // 7. Runout range across all paths
+  // 9. Runout range across all paths
   const runoutDistances = allPaths.map((p) => p.horizontalRunout);
   const minRunout = Math.min(...runoutDistances);
   const maxRunout = Math.max(...runoutDistances);
@@ -315,6 +342,14 @@ export function computeAvalanchePath(
       allPaths,
       pathCount: allPaths.length,
       runoutRange: { min: minRunout, median: medianRunout, max: maxRunout },
+      confinement: confinement.classification,
+      voellmy: voellmyResult.maxVelocity > 0
+        ? {
+            maxVelocity: voellmyResult.maxVelocity,
+            maxPressure: voellmyResult.maxPressure,
+            dynamicRunout: voellmyResult.dynamicRunout,
+          }
+        : null,
     },
   };
 }

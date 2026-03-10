@@ -64,8 +64,19 @@ export default function ResultsDisplay() {
           label="Track Length"
           value={`${formatNumber(result.trackLength)} m`}
         />
-        <Stat label="Alpha" value={`${path.alphaAngle.toFixed(1)}°`} />
-        <Stat label="Beta" value={`${path.betaAngle.toFixed(1)}°`} />
+        <Stat
+          label="Alpha"
+          value={`${path.alphaAngle.toFixed(1)}°`}
+        />
+        <Stat
+          label="Beta"
+          value={`${path.betaAngle.toFixed(1)}°`}
+          title="Beta point: where slope first drops below 10° (Lied & Bakkehøi convention)"
+        />
+        <Stat
+          label="Confinement"
+          value={result.confinement === "channelized" ? "Gully" : result.confinement === "partly-confined" ? "Partial" : "Open"}
+        />
         {result.pathCount > 1 && (
           <Stat
             label="Paths"
@@ -120,6 +131,29 @@ export default function ResultsDisplay() {
         </div>
       )}
 
+      {/* Voellmy dynamic results */}
+      {result.voellmy && (
+        <div className="rounded-md bg-zinc-50 px-3 py-2">
+          <div className="text-xs font-medium text-zinc-500 mb-1">
+            Dynamic Model (Voellmy)
+          </div>
+          <div className="space-y-0.5 text-xs font-mono">
+            <div className="flex justify-between text-zinc-700">
+              <span>Max velocity</span>
+              <span>{result.voellmy.maxVelocity.toFixed(1)} m/s</span>
+            </div>
+            <div className="flex justify-between text-zinc-700">
+              <span>Max pressure</span>
+              <span>{result.voellmy.maxPressure.toFixed(0)} kPa</span>
+            </div>
+            <div className="flex justify-between text-zinc-700">
+              <span>Dynamic runout</span>
+              <span>{formatNumber(result.voellmy.dynamicRunout)} m</span>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Legend */}
       <div>
         <h3 className="mb-2 text-xs font-medium text-zinc-500 uppercase tracking-wide">
@@ -131,9 +165,9 @@ export default function ResultsDisplay() {
   );
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
+function Stat({ label, value, title }: { label: string; value: string; title?: string }) {
   return (
-    <div className="rounded-md bg-zinc-50 px-3 py-2">
+    <div className="rounded-md bg-zinc-50 px-3 py-2" title={title}>
       <div className="text-xs text-zinc-500">{label}</div>
       <div className="text-sm font-semibold text-zinc-900 font-mono">
         {value}

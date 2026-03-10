@@ -13,6 +13,7 @@ import DrawingLayer from "./DrawingLayer";
 import PathOverlay from "./PathOverlay";
 import * as turf from "@turf/turf";
 import { computeAvalanchePath } from "@/lib/avalanche/compute";
+import { detectRegion } from "@/lib/avalanche/region-detect";
 import { logStartingZone, logAvalanchePath, logComputationFailed } from "@/lib/logger";
 
 const MAPTILER_KEY = process.env.NEXT_PUBLIC_MAPTILER_KEY;
@@ -26,6 +27,7 @@ export default function AvalancheMap() {
   const snowDepth = useAvalancheStore((s) => s.snowDepth);
   const snowProfile = useAvalancheStore((s) => s.snowProfile);
   const region = useAvalancheStore((s) => s.region);
+  const setRegion = useAvalancheStore((s) => s.setRegion);
   const setSlopeAngle = useAvalancheStore((s) => s.setSlopeAngle);
   const setResult = useAvalancheStore((s) => s.setResult);
   const setComputing = useAvalancheStore((s) => s.setComputing);
@@ -73,6 +75,13 @@ export default function AvalancheMap() {
       const center = turf.center(startingZonePolygon).geometry.coordinates as [number, number];
       const area = turf.area(startingZonePolygon);
 
+      // Auto-detect region from coordinates on first computation
+      const detectedRegion = detectRegion(center);
+      if (detectedRegion.id !== region.id) {
+        setRegion(detectedRegion);
+      }
+      const activeRegion = detectedRegion.id !== region.id ? detectedRegion : region;
+
       try {
         const outcome = computeAvalanchePath(
           map,
@@ -80,7 +89,7 @@ export default function AvalancheMap() {
           0, // slope angle is now computed from DEM
           snowDepth,
           snowProfile,
-          region
+          activeRegion
         );
         if (outcome.ok) {
           setResult(outcome.result);
@@ -108,7 +117,7 @@ export default function AvalancheMap() {
     }, 500);
 
     return () => clearTimeout(timer);
-  }, [startingZonePolygon, snowDepth, snowProfile, region, setResult, setComputing, setError, setSlopeAngle]);
+  }, [startingZonePolygon, snowDepth, snowProfile, region, setResult, setComputing, setError, setSlopeAngle, setRegion]);
 
   if (!MAPTILER_KEY) {
     return (
