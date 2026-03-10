@@ -195,9 +195,10 @@ export default function FlowPyOverlay() {
 
     map.getCanvas().style.cursor = "crosshair";
 
-    const label = depth < 0.1
-      ? `~${Math.round(depth * 100)} cm`
-      : `~${depth.toFixed(1)} m`;
+    const depthFt = depth * 3.281;
+    const label = depthFt < 1
+      ? `~${Math.round(depthFt * 12)} in`
+      : `~${depthFt.toFixed(1)} ft`;
 
     if (!popupRef.current) {
       popupRef.current = new maplibregl.Popup({

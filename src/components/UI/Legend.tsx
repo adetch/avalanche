@@ -21,19 +21,19 @@ export default function Legend() {
           <div className="text-xs text-zinc-500 font-medium">Est. Burial Depth</div>
           <div className="flex items-center gap-2">
             <span className="inline-block h-3 w-3 rounded-sm" style={{ backgroundColor: "#FFED9E" }} />
-            <span className="text-xs text-zinc-600">&lt; 0.3 m</span>
+            <span className="text-xs text-zinc-600">&lt; 1 ft</span>
           </div>
           <div className="flex items-center gap-2">
             <span className="inline-block h-3 w-3 rounded-sm" style={{ backgroundColor: "#FDBF50" }} />
-            <span className="text-xs text-zinc-600">0.3 – 1.0 m</span>
+            <span className="text-xs text-zinc-600">1 – 3 ft</span>
           </div>
           <div className="flex items-center gap-2">
             <span className="inline-block h-3 w-3 rounded-sm" style={{ backgroundColor: "#E6641E" }} />
-            <span className="text-xs text-zinc-600">1.0 – 2.0 m</span>
+            <span className="text-xs text-zinc-600">3 – 6 ft</span>
           </div>
           <div className="flex items-center gap-2">
             <span className="inline-block h-3 w-3 rounded-sm" style={{ backgroundColor: "#AA0A0A" }} />
-            <span className="text-xs text-zinc-600">&gt; 2.0 m</span>
+            <span className="text-xs text-zinc-600">&gt; 6 ft</span>
           </div>
         </div>
       ) : (
