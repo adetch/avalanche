@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useCallback } from "react";
 import { useMap } from "react-map-gl/maplibre";
+import maplibregl from "maplibre-gl";
 import { useAvalancheStore } from "@/store/useAvalancheStore";
 import { gridToLngLat } from "@/lib/geo/virtual-dem";
 import type { FlowPyGridResult } from "@/types";
@@ -120,14 +121,117 @@ function generateHeatmapCanvas(
   return canvas;
 }
 
+/**
+ * Compute the DEM-like metadata object needed for coordinate conversion.
+ */
+function buildDemLike(flowPy: FlowPyGridResult) {
+  const DEG_TO_RAD = Math.PI / 180;
+  const EARTH_RADIUS_M = 6371000;
+  const centerLat = flowPy.origin[1] + (flowPy.rows * flowPy.cellSize / 2) / (EARTH_RADIUS_M * DEG_TO_RAD);
+  const mPerDegLat = EARTH_RADIUS_M * DEG_TO_RAD;
+  const mPerDegLng = EARTH_RADIUS_M * DEG_TO_RAD * Math.cos(centerLat * DEG_TO_RAD);
+  return {
+    origin: flowPy.origin,
+    cellSize: flowPy.cellSize,
+    cols: flowPy.cols,
+    rows: flowPy.rows,
+    mPerDegLat,
+    mPerDegLng,
+  };
+}
+
+/**
+ * Convert lng/lat to grid cell and compute estimated burial depth.
+ * Returns null if outside the grid or no flow at this cell.
+ */
+function getDepthAtLngLat(
+  flowPy: FlowPyGridResult,
+  lng: number,
+  lat: number,
+  snowDepthM: number
+): number | null {
+  const demLike = buildDemLike(flowPy);
+  const dLng = flowPy.cellSize / demLike.mPerDegLng;
+  const dLat = flowPy.cellSize / demLike.mPerDegLat;
+  const col = Math.round((lng - flowPy.origin[0]) / dLng);
+  const row = Math.round((lat - flowPy.origin[1]) / dLat);
+
+  if (row < 0 || row >= flowPy.rows || col < 0 || col >= flowPy.cols) return null;
+
+  const idx = row * flowPy.cols + col;
+  const flux = flowPy.rMax[idx];
+  if (flux <= 0) return null;
+
+  const overlap = flowPy.cellCount[idx];
+  return snowDepthM * flux * Math.max(overlap, 1);
+}
+
 export default function FlowPyOverlay() {
   const result = useAvalancheStore((s) => s.result);
   const snowDepth = useAvalancheStore((s) => s.snowDepth);
   const { current: mapRef } = useMap();
   const addedRef = useRef(false);
+  const popupRef = useRef<maplibregl.Popup | null>(null);
 
   const snowDepthM = snowDepth / 100;
 
+  // Hover handler: show burial depth tooltip
+  const onMouseMove = useCallback((e: maplibregl.MapMouseEvent) => {
+    const flowPy = result?.flowPy;
+    if (!flowPy) return;
+
+    const depth = getDepthAtLngLat(flowPy, e.lngLat.lng, e.lngLat.lat, snowDepthM);
+    const map = mapRef?.getMap();
+    if (!map) return;
+
+    if (depth === null || depth < 0.02) {
+      if (popupRef.current) {
+        popupRef.current.remove();
+        popupRef.current = null;
+      }
+      map.getCanvas().style.cursor = "";
+      return;
+    }
+
+    map.getCanvas().style.cursor = "crosshair";
+
+    const label = depth < 0.1
+      ? `~${Math.round(depth * 100)} cm`
+      : `~${depth.toFixed(1)} m`;
+
+    if (!popupRef.current) {
+      popupRef.current = new maplibregl.Popup({
+        closeButton: false,
+        closeOnClick: false,
+        className: "flowpy-tooltip",
+        offset: [0, -10],
+      });
+    }
+
+    popupRef.current
+      .setLngLat(e.lngLat)
+      .setHTML(`<div style="font-size:12px;font-weight:600;padding:2px 4px">Est. burial: ${label}</div>`)
+      .addTo(map);
+  }, [result?.flowPy, snowDepthM, mapRef]);
+
+  // Add/remove mousemove listener
+  useEffect(() => {
+    const map = mapRef?.getMap();
+    if (!map || !result?.flowPy) return;
+
+    map.on("mousemove", onMouseMove);
+
+    return () => {
+      map.off("mousemove", onMouseMove);
+      if (popupRef.current) {
+        popupRef.current.remove();
+        popupRef.current = null;
+      }
+      map.getCanvas().style.cursor = "";
+    };
+  }, [result?.flowPy, onMouseMove, mapRef]);
+
+  // Render heatmap image layer
   useEffect(() => {
     const map = mapRef?.getMap();
     if (!map) return;
@@ -144,25 +248,10 @@ export default function FlowPyOverlay() {
     const flowPy = result?.flowPy;
     if (!flowPy || flowPy.cols === 0 || flowPy.rows === 0) return;
 
-    // Generate heatmap canvas colored by estimated burial depth
     const canvas = generateHeatmapCanvas(flowPy, snowDepthM);
     const dataUrl = canvas.toDataURL();
 
-    // Compute geographic bounds
-    const DEG_TO_RAD = Math.PI / 180;
-    const EARTH_RADIUS_M = 6371000;
-    const centerLat = flowPy.origin[1] + (flowPy.rows * flowPy.cellSize / 2) / (EARTH_RADIUS_M * DEG_TO_RAD);
-    const mPerDegLat = EARTH_RADIUS_M * DEG_TO_RAD;
-    const mPerDegLng = EARTH_RADIUS_M * DEG_TO_RAD * Math.cos(centerLat * DEG_TO_RAD);
-    const demLike = {
-      origin: flowPy.origin,
-      cellSize: flowPy.cellSize,
-      cols: flowPy.cols,
-      rows: flowPy.rows,
-      mPerDegLat,
-      mPerDegLng,
-    };
-
+    const demLike = buildDemLike(flowPy);
     const sw = gridToLngLat(demLike as Parameters<typeof gridToLngLat>[0], 0, 0);
     const se = gridToLngLat(demLike as Parameters<typeof gridToLngLat>[0], 0, flowPy.cols - 1);
     const ne = gridToLngLat(demLike as Parameters<typeof gridToLngLat>[0], flowPy.rows - 1, flowPy.cols - 1);
