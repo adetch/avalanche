@@ -1,0 +1,32 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      faSolution;
+}
+
+// Finite-area solver settings for the shallow-water avalanche equations.
+
+solvers
+{
+    h
+    {
+        solver          PBiCGStab;
+        preconditioner  DILU;
+        tolerance       1e-08;
+        relTol          0;
+    }
+
+    Us
+    {
+        solver          PBiCGStab;
+        preconditioner  DILU;
+        tolerance       1e-08;
+        relTol          0;
+    }
+}
+
+nOuterCorrectors    2;
+nCorrectors         1;
+nNonOrthogonalCorrectors 0;
