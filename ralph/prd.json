@@ -125,7 +125,7 @@
       ],
       "priority": 7,
       "effort": "medium",
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
