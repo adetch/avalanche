@@ -54,7 +54,7 @@
       ],
       "priority": 3,
       "effort": "medium",
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
