@@ -1,0 +1,78 @@
+{
+  "schemaVersion": 1,
+  "dem": {
+    "origin": [-116.8425, 51.0420],
+    "cellSize": 15,
+    "rows": 8,
+    "cols": 6,
+    "elevation": [
+      2050, 2055, 2060, 2058, 2052, 2048,
+      2100, 2108, 2115, 2110, 2105, 2098,
+      2160, 2170, 2178, 2172, 2165, 2155,
+      2230, 2240, 2250, 2245, 2235, 2220,
+      2310, 2320, 2330, 2325, 2315, 2300,
+      2400, 2410, 2420, 2415, 2405, 2390,
+      2490, 2500, 2510, 2505, 2495, 2480,
+      2550, 2560, 2570, 2565, 2555, 2540
+    ]
+  },
+  "releaseCells": [
+    [7, 2], [7, 3], [6, 2], [6, 3]
+  ],
+  "startingZone": {
+    "type": "Polygon",
+    "coordinates": [[
+      [-116.8419, 51.0430],
+      [-116.8415, 51.0430],
+      [-116.8415, 51.0434],
+      [-116.8419, 51.0434],
+      [-116.8419, 51.0430]
+    ]]
+  },
+  "snowDepthM": 1.2,
+  "snowProfile": {
+    "id": "dry-slab",
+    "label": "Dry Slab",
+    "density": 250,
+    "entrainmentFactor": 2.0,
+    "frictionMu": 0.3,
+    "frictionXi": 1500
+  },
+  "regionCoefficients": {
+    "id": "canadian-rockies",
+    "label": "Canadian Rockies",
+    "a": 0.93,
+    "b": -1.85,
+    "sigma": 2.5,
+    "source": "McClung & Mears (1991)"
+  },
+  "primaryPath": {
+    "crownPoint": {
+      "lngLat": [-116.8417, 51.0432],
+      "elevation": 2570,
+      "distanceFromCrown": 0
+    },
+    "betaPoint": {
+      "lngLat": [-116.8420, 51.0426],
+      "elevation": 2250,
+      "distanceFromCrown": 420
+    },
+    "runoutPoint": {
+      "lngLat": [-116.8423, 51.0421],
+      "elevation": 2060,
+      "distanceFromCrown": 780
+    },
+    "fallLineAzimuth": 195,
+    "betaAngle": 37.2,
+    "alphaAngle": 33.1,
+    "profile": [
+      { "lngLat": [-116.8417, 51.0432], "elevation": 2570, "distanceFromCrown": 0 },
+      { "lngLat": [-116.8418, 51.0431], "elevation": 2510, "distanceFromCrown": 100 },
+      { "lngLat": [-116.8419, 51.0429], "elevation": 2420, "distanceFromCrown": 250 },
+      { "lngLat": [-116.8420, 51.0426], "elevation": 2250, "distanceFromCrown": 420 },
+      { "lngLat": [-116.8421, 51.0424], "elevation": 2170, "distanceFromCrown": 550 },
+      { "lngLat": [-116.8422, 51.0423], "elevation": 2110, "distanceFromCrown": 650 },
+      { "lngLat": [-116.8423, 51.0421], "elevation": 2060, "distanceFromCrown": 780 }
+    ]
+  }
+}
