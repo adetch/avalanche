@@ -71,7 +71,7 @@
       ],
       "priority": 4,
       "effort": "high",
-      "passes": false,
+      "passes": true,
       "notes": "Depends on US-003 schema"
     },
     {
@@ -125,7 +125,7 @@
       ],
       "priority": 7,
       "effort": "medium",
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
