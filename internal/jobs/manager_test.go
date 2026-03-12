@@ -196,8 +196,7 @@ func TestCancelJob(t *testing.T) {
 		t.Fatalf("Cancel: %v", err)
 	}
 
-	// Job should be cleaned up after a moment
-	time.Sleep(50 * time.Millisecond)
+	// Job should be removed from map immediately after cancel
 	_, err = mgr.Get(id)
 	if err != ErrNotFound {
 		t.Errorf("expected ErrNotFound after cancel, got %v", err)
@@ -257,14 +256,14 @@ func TestCleanupAfterResultsFetched(t *testing.T) {
 		t.Fatalf("Results: %v", err)
 	}
 
-	// Wait for async cleanup
-	time.Sleep(100 * time.Millisecond)
-
-	// Job should be gone
+	// Job should be removed from map immediately after results fetch
 	_, err = mgr.Get(id)
 	if err != ErrNotFound {
 		t.Errorf("expected ErrNotFound after cleanup, got %v", err)
 	}
+
+	// Wait for async filesystem cleanup
+	time.Sleep(100 * time.Millisecond)
 
 	// Workspace directory should be gone
 	workDir := filepath.Join(dir, id)

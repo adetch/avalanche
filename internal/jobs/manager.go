@@ -22,12 +22,11 @@ const (
 )
 
 type Job struct {
-	ID        string `json:"id"`
-	Status    Status `json:"status"`
-	Error     string `json:"error,omitempty"`
-	WorkDir   string `json:"-"`
-	cancel    context.CancelFunc
-	resultFetched bool
+	ID      string `json:"id"`
+	Status  Status `json:"status"`
+	Error   string `json:"error,omitempty"`
+	WorkDir string `json:"-"`
+	cancel  context.CancelFunc
 }
 
 // RunFunc is called to execute a job. It receives the job workspace directory
@@ -118,7 +117,8 @@ func (m *Manager) run(ctx context.Context, job *Job, input *schema.Input) {
 	}
 }
 
-// Get returns a job by ID.
+// Get returns a snapshot of a job by ID.
+// The returned Job is a copy; callers may read its fields without holding a lock.
 func (m *Manager) Get(id string) (*Job, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -126,7 +126,9 @@ func (m *Manager) Get(id string) (*Job, error) {
 	if !ok {
 		return nil, ErrNotFound
 	}
-	return job, nil
+	snapshot := *job
+	snapshot.cancel = nil // don't leak cancel func to callers
+	return &snapshot, nil
 }
 
 // Results returns the result.json contents for a completed job.
@@ -149,9 +151,9 @@ func (m *Manager) Results(id string) (json.RawMessage, error) {
 		return nil, fmt.Errorf("read result.json: %w", err)
 	}
 
-	// Mark for cleanup
-	job.resultFetched = true
-	go m.cleanup(job)
+	// Remove from map synchronously; clean filesystem asynchronously
+	delete(m.jobs, id)
+	go os.RemoveAll(job.WorkDir)
 
 	return json.RawMessage(data), nil
 }
@@ -169,19 +171,13 @@ func (m *Manager) Cancel(id string) error {
 	if job.cancel != nil {
 		job.cancel()
 	}
-	job.Status = StatusFailed
-	job.Error = "cancelled"
 
-	go m.cleanup(job)
+	// Remove from map synchronously; clean filesystem asynchronously
+	workDir := job.WorkDir
+	delete(m.jobs, id)
+	go os.RemoveAll(workDir)
 
 	return nil
-}
-
-func (m *Manager) cleanup(job *Job) {
-	os.RemoveAll(job.WorkDir)
-	m.mu.Lock()
-	delete(m.jobs, job.ID)
-	m.mu.Unlock()
 }
 
 // CleanupAll removes all job workspaces (e.g., on daemon restart).
