@@ -10,59 +10,44 @@ const SOURCE_ID = "flowpy-heatmap";
 const LAYER_ID = "flowpy-heatmap-layer";
 
 /**
- * Estimated burial depth thresholds (meters).
- * Based on avalanche rescue statistics:
- * - <0.3m: light deposition, self-rescue likely
- * - 0.3–1.0m: partial burial, companion rescue critical
- * - 1.0–2.0m: full burial, critical
- * - >2.0m: very deep, low survival probability
+ * Color ramp for the TRACK zone (flow passes through, no deposition).
+ * Subtle warm amber tint showing the avalanche path from release to deposit.
+ * t: 0-1 normalized rMax (1.0 = release cell, decaying downslope).
  */
-const DEPTH_THRESHOLDS = [0.02, 0.3, 1.0, 2.0]; // meters
+function trackToColor(t: number): [number, number, number, number] {
+  if (t < 0.02) return [0, 0, 0, 0];
+  // Subtle amber wash: more visible near release, fading through track
+  const s = Math.min(1, t);
+  return [
+    lerp(240, 220, s),
+    lerp(200, 160, s),
+    lerp(130, 80, s),
+    lerp(30, 100, s),
+  ];
+}
 
 /**
- * Color ramp by estimated burial depth (meters).
- * Returns [r, g, b, a] in 0-255 range.
- *
- * Yellow (<0.5m) → Orange (0.5–1m) → Red (1–2m) → Dark red (>2m)
+ * Color ramp for the DEPOSIT zone (debris accumulates here).
+ * t: 0-1 normalized deposition intensity (relative to peak).
+ * Yellow (fringe) → Orange (moderate) → Red (heavy) → Dark red (core)
  */
-function depthToColor(depthM: number): [number, number, number, number] {
-  if (depthM < DEPTH_THRESHOLDS[0]) return [0, 0, 0, 0]; // negligible
+function depositToColor(t: number): [number, number, number, number] {
+  if (t < 0.03) return [0, 0, 0, 0];
 
-  if (depthM < DEPTH_THRESHOLDS[1]) {
-    // 0.1m – 0.5m: yellow (light hazard)
-    const t = (depthM - DEPTH_THRESHOLDS[0]) / (DEPTH_THRESHOLDS[1] - DEPTH_THRESHOLDS[0]);
-    return [
-      lerp(255, 253, t),
-      lerp(237, 191, t),
-      lerp(160, 80, t),
-      lerp(70, 140, t),
-    ];
+  if (t < 0.2) {
+    const s = (t - 0.03) / 0.17;
+    return [255, lerp(235, 200, s), lerp(140, 70, s), lerp(90, 155, s)];
   }
-
-  if (depthM < DEPTH_THRESHOLDS[2]) {
-    // 0.5m – 1.0m: orange (moderate hazard)
-    const t = (depthM - DEPTH_THRESHOLDS[1]) / (DEPTH_THRESHOLDS[2] - DEPTH_THRESHOLDS[1]);
-    return [
-      lerp(253, 230, t),
-      lerp(191, 100, t),
-      lerp(80, 30, t),
-      lerp(140, 185, t),
-    ];
+  if (t < 0.45) {
+    const s = (t - 0.2) / 0.25;
+    return [lerp(255, 240, s), lerp(200, 120, s), lerp(70, 35, s), lerp(155, 185, s)];
   }
-
-  if (depthM < DEPTH_THRESHOLDS[3]) {
-    // 1.0m – 2.0m: red (critical)
-    const t = (depthM - DEPTH_THRESHOLDS[2]) / (DEPTH_THRESHOLDS[3] - DEPTH_THRESHOLDS[2]);
-    return [
-      lerp(230, 170, t),
-      lerp(100, 20, t),
-      lerp(30, 20, t),
-      lerp(185, 210, t),
-    ];
+  if (t < 0.7) {
+    const s = (t - 0.45) / 0.25;
+    return [lerp(240, 200, s), lerp(120, 40, s), lerp(35, 20, s), lerp(185, 210, s)];
   }
-
-  // >2.0m: dark red (extreme)
-  return [150, 10, 10, 220];
+  const s = Math.min(1, (t - 0.7) / 0.3);
+  return [lerp(200, 150, s), lerp(40, 10, s), lerp(20, 10, s), lerp(210, 230, s)];
 }
 
 function lerp(a: number, b: number, t: number): number {
@@ -70,18 +55,22 @@ function lerp(a: number, b: number, t: number): number {
 }
 
 /**
- * Generate a canvas image colored by estimated burial depth.
+ * Generate a canvas image showing the full avalanche flow and deposit.
  *
- * Uses the mass-balance deposition field from Flow-Py routing.
- * Deposition fraction represents the portion of release mass that stops
- * at each cell (influx - outflux). Multiply by snow depth to get physical depth.
+ * Two-layer visualization:
+ * 1. TRACK zone (steep slopes, deposition = 0): subtle amber wash using rMax
+ *    to show where the avalanche travels from release to runout
+ * 2. DEPOSIT zone (gentle slopes, deposition > 0): warm yellow → red ramp
+ *    showing where debris accumulates, normalized to peak deposit intensity
  *
- * Based on Christen et al. (2010) mass conservation principle and
- * Sovilla et al. (2010) empirical deposition observations.
+ * This avoids the visual gap between the starting zone and deposit that occurs
+ * when only showing deposition (which is physically zero on steep track slopes).
+ * The track visualization uses rMax from Flow-Py, which is spatially continuous
+ * from release through track to runout.
  */
 function generateHeatmapCanvas(
   result: FlowPyGridResult,
-  snowDepthM: number
+  _snowDepthM: number
 ): HTMLCanvasElement {
   const canvas = document.createElement("canvas");
   canvas.width = result.cols;
@@ -89,17 +78,42 @@ function generateHeatmapCanvas(
   const ctx = canvas.getContext("2d")!;
   const imageData = ctx.createImageData(result.cols, result.rows);
 
+  // Find peaks for normalization
+  let maxDep = 0;
+  let maxR = 0;
+  for (let i = 0; i < result.deposition.length; i++) {
+    if (result.deposition[i] > maxDep) maxDep = result.deposition[i];
+    if (result.rMax[i] > maxR) maxR = result.rMax[i];
+  }
+
+  if (maxR <= 0 && maxDep <= 0) {
+    ctx.putImageData(imageData, 0, 0);
+    return canvas;
+  }
+
   for (let r = 0; r < result.rows; r++) {
     for (let c = 0; c < result.cols; c++) {
       const gridIdx = r * result.cols + c;
       const canvasRow = result.rows - 1 - r; // flip: row 0 = south → bottom
       const pixelIdx = (canvasRow * result.cols + c) * 4;
 
-      // Deposition fraction → physical depth
-      // Each release cell contributes unit mass. deposition[i] is the sum
-      // of mass fractions from all release cells that deposited here.
-      const estimatedDepth = snowDepthM * result.deposition[gridIdx];
-      const [red, green, blue, alpha] = depthToColor(estimatedDepth);
+      const dep = result.deposition[gridIdx];
+      const rMaxVal = result.rMax[gridIdx];
+
+      let red: number, green: number, blue: number, alpha: number;
+
+      if (dep > 0 && maxDep > 0) {
+        // DEPOSIT zone: sqrt compression so shallow deposits are visible.
+        // Without sqrt, a peak of 5m makes 0.1m deposits invisible (t=0.02).
+        // With sqrt: t=sqrt(0.02)=0.14 → visible in the color ramp.
+        const t = Math.sqrt(dep / maxDep);
+        [red, green, blue, alpha] = depositToColor(t);
+      } else if (rMaxVal > 0 && maxR > 0) {
+        // TRACK zone: subtle amber showing flow path
+        [red, green, blue, alpha] = trackToColor(rMaxVal / maxR);
+      } else {
+        red = green = blue = alpha = 0;
+      }
 
       imageData.data[pixelIdx] = red;
       imageData.data[pixelIdx + 1] = green;
@@ -153,6 +167,10 @@ export function getDepthAtLngLat(
   const dep = flowPy.deposition[idx];
   if (dep <= 0) return null;
 
+  // voellmy-2d/openfoam store deposition in absolute meters; flow-py uses dimensionless fraction
+  if (flowPy.solverInfo?.type === 'voellmy-2d' || flowPy.solverInfo?.type === 'openfoam') {
+    return dep;
+  }
   return snowDepthM * dep;
 }
 

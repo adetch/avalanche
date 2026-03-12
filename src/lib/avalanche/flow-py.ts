@@ -93,6 +93,17 @@ export function runFlowPy(
     propagateSingleRelease(dem, startRow, startCol, params, tanAlpha, entrainmentRate, zMaxDelta, rMax, cellCount, deposition);
   }
 
+  // Post-processing: redistribute deposition into a physically plausible pattern.
+  //
+  // The raw mass-balance (influx - outflux) gives the correct TOTAL mass budget
+  // but distributes it as tiny residuals at every cell boundary. Real avalanche
+  // deposits form a concentrated tongue in the runout zone.
+  //
+  // Sovilla et al. (2010): deposit area ≈ 2-5× release area, depth inversely
+  // correlates with slope angle. Bartelt et al. (2012): deposition occurs where
+  // flow velocity drops below a critical threshold.
+  redistributeDeposition(deposition, rMax, dem, tanAlpha, params.rStop);
+
   return {
     origin: dem.origin,
     cellSize: dem.cellSize,
@@ -103,6 +114,106 @@ export function runFlowPy(
     cellCount,
     deposition,
   };
+}
+
+/**
+ * Redistribute raw mass-balance deposition into a physically plausible pattern.
+ *
+ * Raw deposition (influx - outflux) scatters tiny residuals at every cell boundary
+ * because MFD routing is nearly lossless on smooth terrain. This function concentrates
+ * the same total mass into the runout zone where the avalanche actually deposits.
+ *
+ * Design principle: Flow-Py (D'Amboise et al. 2022) is a path-extent model, not a
+ * deposition model. The rMax field is spatially continuous and follows the flow
+ * topology, making it the best available proxy for deposit distribution. We use it
+ * directly (linear, not squared) to preserve the connected spatial structure that
+ * higher powers and hard thresholds destroy on real terrain.
+ *
+ * Weight = rMax × softDecel(slope, alpha)
+ *   - rMax: linear flow intensity preserves connected tongue shape across
+ *     bifurcating channels on real terrain
+ *   - softDecel: smooth sigmoid-like ramp from 0 (steep track) to 1 (gentle runout),
+ *     avoids the hard cutoff at slope = alpha that creates checkerboard artifacts
+ *     where cell-by-cell slope varies on real terrain
+ *
+ * No thresholds or area caps — these fragment deposits on complex terrain.
+ * Falls back to raw mass-balance if no deceleration zone exists.
+ * Total deposited mass is preserved (mass conservation).
+ */
+function redistributeDeposition(
+  deposition: Float32Array,
+  rMax: Float32Array,
+  dem: VirtualDEM,
+  tanAlpha: number,
+  rStop: number
+): void {
+  const { cols, rows, cellSize, elevation } = dem;
+  const totalCells = rows * cols;
+
+  // Sum raw mass-balance deposition (the correct total mass budget)
+  let totalMass = 0;
+  for (let i = 0; i < totalCells; i++) {
+    totalMass += deposition[i];
+  }
+  if (totalMass <= 0) return;
+
+  // Smooth deceleration transition width: ~30% of tanAlpha.
+  // This creates a gradual ramp (~5° wide for alpha=22°) instead of a
+  // hard cutoff at slope = alpha. Real avalanche deposits don't start
+  // abruptly — the flow decelerates over a transition zone as slope
+  // decreases below the friction-equivalent angle.
+  const transitionWidth = tanAlpha * 0.3;
+
+  // Compute deposition weights.
+  // rMax is used linearly (not squared or cubed) because:
+  // - It preserves the connected spatial structure of MFD routing
+  // - Higher powers (rMax², rMax⁴) amplify differences between flow
+  //   channels, creating isolated dots on real terrain where flow
+  //   bifurcates around ridges and terrain features
+  // - The natural rMax gradient (high at centerline, low at edges)
+  //   already provides adequate lateral concentration
+  let sumWeight = 0;
+  const weight = new Float32Array(totalCells);
+
+  for (let i = 0; i < totalCells; i++) {
+    if (rMax[i] < rStop) continue;
+
+    const r = Math.floor(i / cols);
+    const c = i % cols;
+
+    // Compute local slope (max downhill gradient to any neighbor)
+    let maxTanPhi = 0;
+    for (let ni = 0; ni < 8; ni++) {
+      const [dr, dc, distFactor] = NEIGHBORS[ni];
+      const nr = r + dr;
+      const nc = c + dc;
+      if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) continue;
+      const nElev = elevation[nr * cols + nc];
+      if (isNaN(nElev)) continue;
+      const drop = elevation[i] - nElev;
+      if (drop <= 0) continue;
+      const tanPhi = drop / (distFactor * cellSize);
+      if (tanPhi > maxTanPhi) maxTanPhi = tanPhi;
+    }
+
+    // Smooth deceleration factor: 0 in steep track, ramps to 1 in gentle runout.
+    // Linear ramp over transitionWidth centered at slope = alpha.
+    // Saturates at 1.0 when slope drops ~30% below alpha-equivalent angle.
+    const decelFactor = Math.max(0, Math.min(1,
+      (tanAlpha - maxTanPhi) / transitionWidth));
+    if (decelFactor <= 0) continue;
+
+    weight[i] = rMax[i] * decelFactor;
+    sumWeight += weight[i];
+  }
+
+  // If no deceleration zone found (uniform steep terrain), keep raw deposition
+  if (sumWeight <= 0) return;
+
+  // Redistribute total mass according to weights
+  for (let i = 0; i < totalCells; i++) {
+    deposition[i] = (weight[i] / sumWeight) * totalMass;
+  }
 }
 
 /**

@@ -16,6 +16,7 @@ import * as turf from "@turf/turf";
 import { computeAvalanchePath } from "@/lib/avalanche/compute";
 import { detectRegion } from "@/lib/avalanche/region-detect";
 import { logStartingZone, logAvalanchePath, logComputationFailed } from "@/lib/logger";
+import { runOpenFoamLocal } from "@/lib/solver/openfoam-local";
 
 const MAPTILER_KEY = process.env.NEXT_PUBLIC_MAPTILER_KEY;
 
@@ -33,6 +34,11 @@ export default function AvalancheMap() {
   const setResult = useAvalancheStore((s) => s.setResult);
   const setComputing = useAvalancheStore((s) => s.setComputing);
   const setError = useAvalancheStore((s) => s.setError);
+  const solverMode = useAvalancheStore((s) => s.solverMode);
+  const localSolverUrl = useAvalancheStore((s) => s.localSolverUrl);
+  const setExternalSolverStatus = useAvalancheStore((s) => s.setExternalSolverStatus);
+  const setExternalSolverError = useAvalancheStore((s) => s.setExternalSolverError);
+  const requestIdRef = useRef(0);
 
   const onMapLoad = useCallback(() => {
     const map = mapRef.current?.getMap();
@@ -70,6 +76,8 @@ export default function AvalancheMap() {
 
     setComputing(true);
     setError(null);
+    setExternalSolverStatus("idle");
+    setExternalSolverError(null);
 
     // Small delay to ensure terrain tiles are loaded at current view
     const timer = setTimeout(() => {
@@ -90,7 +98,8 @@ export default function AvalancheMap() {
           0, // slope angle is now computed from DEM
           snowDepth,
           snowProfile,
-          activeRegion
+          activeRegion,
+          { flowPyMode: solverMode === "openfoam-local" ? "none" : "internal" }
         );
         if (outcome.ok) {
           setResult(outcome.result);
@@ -102,6 +111,32 @@ export default function AvalancheMap() {
             setError(
               `Slope angle (${Math.round(outcome.result.computedSlopeAngle)}°) is below the typical 25° threshold for slab avalanches. Results may be unreliable.`
             );
+          }
+          if (solverMode === "openfoam-local") {
+            const requestId = ++requestIdRef.current;
+            const snowDepthM = snowDepth / 100;
+            setExternalSolverStatus("running");
+            runOpenFoamLocal(
+              map,
+              startingZonePolygon,
+              outcome.result.path,
+              snowDepthM,
+              snowProfile,
+              activeRegion,
+              localSolverUrl
+            ).then((flowPy) => {
+              if (requestIdRef.current !== requestId) return;
+              const current = useAvalancheStore.getState().result;
+              if (current) {
+                setResult({ ...current, flowPy });
+              }
+              setExternalSolverStatus("complete");
+            }).catch((err) => {
+              if (requestIdRef.current !== requestId) return;
+              setExternalSolverStatus("failed");
+              const msg = err instanceof Error ? err.message : "openfoam solver failed";
+              setExternalSolverError(msg);
+            });
           }
         } else {
           const { failure } = outcome;
@@ -118,7 +153,7 @@ export default function AvalancheMap() {
     }, 500);
 
     return () => clearTimeout(timer);
-  }, [startingZonePolygon, snowDepth, snowProfile, region, setResult, setComputing, setError, setSlopeAngle, setRegion]);
+  }, [startingZonePolygon, snowDepth, snowProfile, region, solverMode, localSolverUrl, setResult, setComputing, setError, setSlopeAngle, setRegion, setExternalSolverStatus, setExternalSolverError]);
 
   if (!MAPTILER_KEY) {
     return (

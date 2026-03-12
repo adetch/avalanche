@@ -199,9 +199,12 @@ describe("runFlowPy", () => {
   });
 
   it("deposition concentrates in runout zone, not at release", () => {
-    // Steep slope (row*6 = ~31° slope) → flow should travel far
-    // Deposition should be minimal at release and concentrated where flow stops
-    const dem = makeDEM(80, 20, (row) => row * 6);
+    // Realistic terrain: steep track transitioning to gentle runout
+    // Rows 40-79: steep (~39°, slope 8m per 10m horizontal)
+    // Rows 0-39:  gentle (~11°, slope 2m per 10m horizontal)
+    const dem = makeDEM(80, 20, (row) =>
+      row >= 40 ? 40 * 2 + (row - 40) * 8 : row * 2
+    );
     const result = runFlowPy(dem, [[79, 10]], {
       alphaAngleDeg: 20,
       exponent: 8,
@@ -221,11 +224,13 @@ describe("runFlowPy", () => {
       }
     }
 
-    // Max deposition should NOT be at the release cell
-    // It should be somewhere downslope (lower row number)
-    expect(maxDepRow).toBeLessThan(79);
-    // Release cell should have very low deposition (most mass routes onward)
-    expect(releaseDeposition).toBeLessThan(maxDeposition);
+    // Max deposition should be in or at the runout zone transition (rows ≤40),
+    // not at the release (row 79) or in the steep track (rows 41-79)
+    expect(maxDepRow).toBeLessThanOrEqual(40);
+    // Release cell should have zero deposition (slope > alpha → acceleration zone)
+    expect(releaseDeposition).toBe(0);
+    // Peak deposition should be meaningful (not scattered residuals)
+    expect(maxDeposition).toBeGreaterThan(0.01);
   });
 
   it("multiple release cells composite correctly", () => {

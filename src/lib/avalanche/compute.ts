@@ -34,7 +34,7 @@ import { DEFAULT_SNOW_PROFILE } from "./snow-profiles";
 import { estimatePathConfinement } from "./confinement";
 import { runVoellmy1D } from "./voellmy";
 import { buildVirtualDEM, identifyReleaseCells } from "@/lib/geo/virtual-dem";
-import { runFlowPy } from "./flow-py";
+import { runVoellmy2D } from "./voellmy-2d";
 import type { FlowPyGridResult } from "@/types";
 
 export interface ComputeFailure {
@@ -177,7 +177,8 @@ export function computeAvalanchePath(
   _slopeAngle: number,
   snowDepthCm: number,
   snowProfile: SnowProfile = DEFAULT_SNOW_PROFILE,
-  region: RegionCoefficients = DEFAULT_REGION
+  region: RegionCoefficients = DEFAULT_REGION,
+  options?: { flowPyMode?: "internal" | "none" }
 ): ComputeResult {
   const t0 = performance.now();
   clearElevationCache();
@@ -320,36 +321,39 @@ export function computeAvalanchePath(
 
   // 9. Flow-Py 2D simulation
   let flowPyResult: FlowPyGridResult | null = null;
-  try {
-    const t3 = performance.now();
-    const downslopeExtent = Math.max(primary.horizontalRunout * 1.5, 2000);
-    const dem = buildVirtualDEM(
-      map,
-      startingZone,
-      primary.fallLineAzimuth,
-      downslopeExtent,
-      15, // 15m cell size
-      500  // 500m lateral padding
-    );
-    if (dem) {
-      const releaseCells = identifyReleaseCells(dem, startingZone);
-      if (releaseCells.length > 0) {
-        // Use the conservative alpha angle (alpha - sigma) for longer runout
-        const conservativeAlpha = Math.max(primary.alphaAngle - (region.sigma || 2), 10);
-        flowPyResult = runFlowPy(dem, releaseCells, {
-          alphaAngleDeg: conservativeAlpha,
-          exponent: 8,
-          rStop: 3e-4,
-        }, snowProfile.entrainmentFactor);
-        const reachedCells = flowPyResult.cellCount.reduce((sum, c) => sum + (c > 0 ? 1 : 0), 0);
-        const t4 = performance.now();
-        console.log(
-          `[avalanche] flow-py: ${dem.cols}x${dem.rows} grid, ${releaseCells.length} release cells, ${reachedCells} reached, alpha=${conservativeAlpha.toFixed(1)}° ${(t4 - t3).toFixed(0)}ms`
-        );
+  if (options?.flowPyMode !== "none") {
+    try {
+      const t3 = performance.now();
+      const downslopeExtent = Math.max(primary.horizontalRunout * 1.5, 2000);
+      const dem = buildVirtualDEM(
+        map,
+        startingZone,
+        primary.fallLineAzimuth,
+        downslopeExtent,
+        15, // 15m cell size
+        500  // 500m lateral padding
+      );
+      if (dem) {
+        const releaseCells = identifyReleaseCells(dem, startingZone);
+        if (releaseCells.length > 0) {
+          flowPyResult = runVoellmy2D(dem, releaseCells, snowDepthM, {
+            mu: snowProfile.frictionMu,
+            xi: snowProfile.frictionXi,
+            density: snowProfile.density,
+            entrainmentFactor: snowProfile.entrainmentFactor,
+            maxTime: 120,
+          });
+          const reachedCells = flowPyResult.cellCount.reduce((sum, c) => sum + (c > 0 ? 1 : 0), 0);
+          const t4 = performance.now();
+          const info = flowPyResult.solverInfo;
+          console.log(
+            `[avalanche] voellmy-2d: ${dem.cols}x${dem.rows} grid, ${releaseCells.length} release cells, ${reachedCells} reached, ${info?.timeSteps} steps, t=${info?.simulationTime.toFixed(1)}s, mass=${((info?.massConservation ?? 1) * 100).toFixed(1)}% ${(t4 - t3).toFixed(0)}ms`
+          );
+        }
       }
+    } catch (err) {
+      console.warn("[avalanche] flow-py failed:", err);
     }
-  } catch (err) {
-    console.warn("[avalanche] flow-py failed:", err);
   }
 
   // 10. Runout range across all paths

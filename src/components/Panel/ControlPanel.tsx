@@ -14,6 +14,10 @@ export default function ControlPanel() {
   const startingZonePolygon = useAvalancheStore((s) => s.startingZonePolygon);
   const clearDrawing = useAvalancheStore((s) => s.clearDrawing);
   const flyTo = useAvalancheStore((s) => s.flyTo);
+  const solverMode = useAvalancheStore((s) => s.solverMode);
+  const setSolverMode = useAvalancheStore((s) => s.setSolverMode);
+  const localSolverUrl = useAvalancheStore((s) => s.localSolverUrl);
+  const setLocalSolverUrl = useAvalancheStore((s) => s.setLocalSolverUrl);
 
   return (
     <div className="flex h-full w-full shrink-0 flex-col border-t border-zinc-200 bg-white p-4 overflow-y-auto md:w-80 md:border-r md:border-t-0 md:p-6">
@@ -36,6 +40,37 @@ export default function ControlPanel() {
         <SlopeAngleInput />
         <SnowDepthInput />
         <SnowConditions />
+
+        <hr className="border-zinc-200" />
+
+        {/* Solver selection */}
+        <div className="space-y-3">
+          <label className="text-sm font-medium text-zinc-700">
+            Solver
+          </label>
+          <select
+            value={solverMode}
+            onChange={(e) => setSolverMode(e.target.value as "internal" | "openfoam-local")}
+            className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900"
+          >
+            <option value="internal">Internal (fast)</option>
+            <option value="openfoam-local">Local OpenFOAM (slow)</option>
+          </select>
+          {solverMode === "openfoam-local" && (
+            <div className="space-y-2">
+              <label className="text-xs text-zinc-500">Local solver URL</label>
+              <input
+                value={localSolverUrl}
+                onChange={(e) => setLocalSolverUrl(e.target.value)}
+                className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-xs text-zinc-900"
+                placeholder="http://127.0.0.1:8090"
+              />
+              <p className="text-[11px] text-zinc-500">
+                Requires a local OpenFOAM container exposing a REST API.
+              </p>
+            </div>
+          )}
+        </div>
 
         <hr className="border-zinc-200" />
 

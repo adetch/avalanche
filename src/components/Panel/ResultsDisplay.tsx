@@ -8,6 +8,9 @@ export default function ResultsDisplay() {
   const result = useAvalancheStore((s) => s.result);
   const isComputing = useAvalancheStore((s) => s.isComputing);
   const error = useAvalancheStore((s) => s.error);
+  const solverMode = useAvalancheStore((s) => s.solverMode);
+  const externalSolverStatus = useAvalancheStore((s) => s.externalSolverStatus);
+  const externalSolverError = useAvalancheStore((s) => s.externalSolverError);
 
   if (isComputing) {
     return (
@@ -187,9 +190,25 @@ export default function ResultsDisplay() {
       {result.flowPy && (
         <div className="rounded-md bg-zinc-50 px-3 py-2">
           <div className="text-xs font-medium text-zinc-500 mb-1">
-            2D Flow Simulation (Flow-Py)
+            2D Flow Simulation
           </div>
           <div className="space-y-0.5 text-xs font-mono">
+            {solverMode === "openfoam-local" && (
+              <div className="flex justify-between text-zinc-700">
+                <span>High-fidelity</span>
+                <span>
+                  {externalSolverStatus === "running" && "running"}
+                  {externalSolverStatus === "complete" && "complete"}
+                  {externalSolverStatus === "failed" && "failed"}
+                  {externalSolverStatus === "idle" && "idle"}
+                </span>
+              </div>
+            )}
+            {solverMode === "openfoam-local" && externalSolverError && (
+              <div className="text-xs text-red-600">
+                {externalSolverError}
+              </div>
+            )}
             <div className="flex justify-between text-zinc-700">
               <span>Grid</span>
               <span>{result.flowPy.cols}×{result.flowPy.rows} ({result.flowPy.cellSize}m)</span>
@@ -217,6 +236,22 @@ export default function ResultsDisplay() {
                   : `${(areaM2 / 10000).toFixed(1)} ha`;
               })()}</span>
             </div>
+            {(result.flowPy.solverInfo?.type === "voellmy-2d" || result.flowPy.solverInfo?.type === "openfoam") && (
+              <>
+                <div className="flex justify-between text-zinc-700">
+                  <span>Mass in</span>
+                  <span>{formatNumber((result.flowPy.solverInfo.massInitial ?? 0) + (result.flowPy.solverInfo.massEntrained ?? 0))} m</span>
+                </div>
+                <div className="flex justify-between text-zinc-700">
+                  <span>Mass deposited</span>
+                  <span>{formatNumber(result.flowPy.solverInfo.massDeposited ?? 0)} m</span>
+                </div>
+                <div className="flex justify-between text-zinc-700">
+                  <span>Mass balance</span>
+                  <span>{(((result.flowPy.solverInfo.massBalanceError ?? 0) * 100)).toFixed(1)}%</span>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

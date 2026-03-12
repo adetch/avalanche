@@ -128,12 +128,28 @@ export interface FlowPyGridResult {
   /** Count of release cells that reached each cell */
   cellCount: Uint16Array;
   /**
-   * Mass-balance deposition fraction at each cell.
-   * For each cell: deposited = influx - outflux (mass that doesn't route onward).
-   * Summed across all release cells. Multiply by snowDepth to get depth estimate.
-   * Based on Christen et al. (2010) mass conservation principle.
+   * Deposition depth at each cell.
+   * - For flow-py solver: dimensionless mass fraction (multiply by snowDepth for meters)
+   * - For voellmy-2d solver: absolute depth in meters
    */
   deposition: Float32Array;
+  /** Maximum flow depth at each cell during simulation (meters) — voellmy-2d only */
+  hMax?: Float32Array;
+  /** Maximum velocity at each cell during simulation (m/s) — voellmy-2d only */
+  vMaxGrid?: Float32Array;
+  /** Maximum impact pressure at each cell (kPa) — voellmy-2d only */
+  pMaxGrid?: Float32Array;
+  /** Solver metadata */
+  solverInfo?: {
+    type: 'flow-py' | 'voellmy-2d' | 'openfoam';
+    simulationTime: number;
+    timeSteps: number;
+    massConservation: number;
+    massInitial?: number;
+    massEntrained?: number;
+    massDeposited?: number;
+    massBalanceError?: number;
+  };
 }
 
 export interface DrawingVertex {

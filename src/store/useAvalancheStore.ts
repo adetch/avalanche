@@ -15,6 +15,10 @@ interface AvalancheStore {
   snowDepth: number;
   snowProfile: SnowProfile;
   region: RegionCoefficients;
+  solverMode: "internal" | "openfoam-local";
+  localSolverUrl: string;
+  externalSolverStatus: "idle" | "running" | "failed" | "complete";
+  externalSolverError: string | null;
 
   // Drawing
   drawingMode: boolean;
@@ -35,6 +39,10 @@ interface AvalancheStore {
   setSnowDepth: (depth: number) => void;
   setSnowProfile: (profile: SnowProfile) => void;
   setRegion: (region: RegionCoefficients) => void;
+  setSolverMode: (mode: "internal" | "openfoam-local") => void;
+  setLocalSolverUrl: (url: string) => void;
+  setExternalSolverStatus: (status: "idle" | "running" | "failed" | "complete") => void;
+  setExternalSolverError: (error: string | null) => void;
   setMapReady: (ready: boolean) => void;
   flyTo: (target: FlyToTarget) => void;
   clearFlyTo: () => void;
@@ -52,6 +60,10 @@ export const useAvalancheStore = create<AvalancheStore>((set, get) => ({
   snowDepth: 100,
   snowProfile: DEFAULT_SNOW_PROFILE,
   region: DEFAULT_REGION,
+  solverMode: "internal",
+  localSolverUrl: "http://127.0.0.1:8090",
+  externalSolverStatus: "idle",
+  externalSolverError: null,
 
   drawingMode: false,
   drawingVertices: [],
@@ -68,6 +80,10 @@ export const useAvalancheStore = create<AvalancheStore>((set, get) => ({
   setSnowDepth: (depth) => set({ snowDepth: depth }),
   setSnowProfile: (profile) => set({ snowProfile: profile }),
   setRegion: (region) => set({ region }),
+  setSolverMode: (mode) => set({ solverMode: mode }),
+  setLocalSolverUrl: (url) => set({ localSolverUrl: url }),
+  setExternalSolverStatus: (status) => set({ externalSolverStatus: status }),
+  setExternalSolverError: (error) => set({ externalSolverError: error }),
   setMapReady: (ready) => set({ mapReady: ready }),
 
   flyTo: (target) => set({ flyToTarget: target }),
