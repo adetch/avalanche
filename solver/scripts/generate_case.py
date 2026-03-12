@@ -369,16 +369,15 @@ def generate_h_field(dem: dict, release_cells: list[list[int]], snow_depth: floa
     The field is areaScalarField for finite-area method.
     """
     rows, cols = dem["rows"], dem["cols"]
-    n_faces = (rows - 1) * (cols - 1) * 2  # 2 triangles per quad
+    n_faces = (rows - 1) * (cols - 1)  # one quad face per blockMesh cell on terrain patch
 
     # Build a set of quads that contain release cells
     release_set = set()
     for rc in release_cells:
         release_set.add((rc[0], rc[1]))
 
-    # Map release cells to triangle face indices.
-    # Each quad (r, c) → (r, c+1) → (r+1, c+1) → (r+1, c) produces
-    # 2 faces at indices: quad_idx*2 and quad_idx*2+1
+    # Map release cells to quad face indices on the terrain patch.
+    # blockMesh produces (cols-1)*(rows-1) quad faces on the terrain patch.
     # quad_idx = r * (cols-1) + c  (for r in 0..rows-2, c in 0..cols-2)
     release_face_indices: set[int] = set()
     for r, c in release_set:
@@ -388,8 +387,7 @@ def generate_h_field(dem: dict, release_cells: list[list[int]], snow_depth: floa
             for qc in (c - 1, c):
                 if 0 <= qr < rows - 1 and 0 <= qc < cols - 1:
                     qi = qr * (cols - 1) + qc
-                    release_face_indices.add(qi * 2)
-                    release_face_indices.add(qi * 2 + 1)
+                    release_face_indices.add(qi)
 
     # Build nonuniform field value list
     values = []

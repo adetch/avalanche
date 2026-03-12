@@ -201,9 +201,9 @@ class TestReleaseCellsConversion:
         assert str(depth) in h_text
 
     def test_h_field_correct_face_count(self, case_dir: Path, sample_data: dict):
-        """Number of values matches 2 * (rows-1) * (cols-1) triangles."""
+        """Number of values matches (rows-1) * (cols-1) quad faces on terrain patch."""
         dem = sample_data["dem"]
-        expected = (dem["rows"] - 1) * (dem["cols"] - 1) * 2
+        expected = (dem["rows"] - 1) * (dem["cols"] - 1)
 
         h_text = (case_dir / "0" / "h").read_text()
         # The count appears as a standalone number before the '(' in List
