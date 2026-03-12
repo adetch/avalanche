@@ -1,0 +1,42 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      faSchemes;
+}
+
+// Finite-area discretisation for depth-averaged shallow-water equations
+// with Voellmy friction (Coulomb + turbulent drag).
+
+ddtSchemes
+{
+    default         Euler;
+}
+
+gradSchemes
+{
+    default         Gauss linear;
+}
+
+divSchemes
+{
+    default         none;
+    div(phis,h)     Gauss upwind;
+    div(phis,Us)    Gauss upwind;
+}
+
+laplacianSchemes
+{
+    default         Gauss linear corrected;
+}
+
+interpolationSchemes
+{
+    default         linear;
+}
+
+lnGradSchemes
+{
+    default         corrected;
+}

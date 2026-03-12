@@ -1,0 +1,22 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      faMeshDefinition;
+}
+
+// Finite-area mesh defined on the terrain surface patch.
+// The shallow-water avalanche equations are solved on this 2D surface.
+
+polyMeshPatches ( terrain );
+
+boundary
+{
+    outline
+    {
+        type            patch;
+        ownerPolyPatch  terrain;
+        neighbourPolyPatch  empty;
+    }
+}
