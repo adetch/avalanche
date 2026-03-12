@@ -1,135 +1,194 @@
-# Solver Input/Output Schema — v1
+# Solver Input/Output JSON Schema
 
-All requests and responses use JSON. Grid arrays are row-major (south-to-north, west-to-east): `value[row * cols + col]`.
+**Schema version:** `schemaVersion = 1`
+
+This document defines the versioned JSON schemas for communication between the
+UI/frontend, the Go solver service, and the OpenFOAM solver container. All
+messages MUST include `schemaVersion: 1`.
 
 ---
 
-## Input (`POST /jobs`)
+## Input Schema
+
+Submitted as the body of `POST /jobs` to the solver service.
 
 ```jsonc
 {
-  "schemaVersion": 1,
-
-  // --- DEM ---
-  "dem": {
-    "origin": [lng, lat],      // SW corner (WGS-84)
-    "cellSize": 15,            // meters
-    "cols": 200,
-    "rows": 150,
-    "elevation": [...]         // row-major Float32, length = rows × cols
-                               // NaN = out-of-bounds / no-data (treated as wall)
-  },
-
-  // --- Release ---
-  "releaseCells": [[row, col], ...],  // grid cells inside the starting zone
-  "snowDepthM": 1.5,                 // uniform initial snow depth (meters)
-
-  // --- Friction (Voellmy model) ---
-  "frictionMu": 0.3,          // Coulomb friction coefficient
-  "frictionXi": 1500,         // turbulent friction (m/s²)
-
-  // --- Snow properties ---
-  "density": 250,             // kg/m³
-  "entrainmentFactor": 2.0,   // multiplier on initial volume for entrainment target
-
-  // --- Simulation control ---
-  "maxTime": 120              // max physical time (seconds)
+  "schemaVersion": 1,           // REQUIRED — must be 1
+  "dem": { ... },               // Digital elevation model grid
+  "releaseCells": [[r,c], ...], // Cells inside starting zone
+  "startingZone": { ... },      // GeoJSON Polygon of release area
+  "snowDepthM": 1.5,            // Snow depth in meters (> 0)
+  "snowProfile": { ... },       // Physical snow parameters
+  "regionCoefficients": { ... },// Alpha-beta regression coefficients
+  "primaryPath": { ... }        // Primary avalanche path geometry
 }
 ```
 
-### Field reference
+### `dem` — Digital Elevation Model
 
-| Field               | Type              | Required | Description                                      |
-| ------------------- | ----------------- | -------- | ------------------------------------------------ |
-| `schemaVersion`     | `integer`         | yes      | Must be `1`                                      |
-| `dem.origin`        | `[number, number]`| yes      | SW corner `[lng, lat]` in WGS-84                 |
-| `dem.cellSize`      | `number`          | yes      | Grid cell size in meters                         |
-| `dem.cols`          | `integer`         | yes      | Number of columns                                |
-| `dem.rows`          | `integer`         | yes      | Number of rows                                   |
-| `dem.elevation`     | `number[]`        | yes      | Row-major elevations; NaN for no-data            |
-| `releaseCells`      | `[int, int][]`    | yes      | `[row, col]` pairs inside starting zone          |
-| `snowDepthM`        | `number`          | yes      | Initial snow depth in meters (>0)                |
-| `frictionMu`        | `number`          | yes      | Coulomb friction (typical 0.15–0.55)             |
-| `frictionXi`        | `number`          | yes      | Turbulent friction in m/s² (typical 500–2500)    |
-| `density`           | `number`          | yes      | Snow density in kg/m³ (typical 80–500)           |
-| `entrainmentFactor` | `number`          | yes      | Entrainment target as multiple of initial volume |
-| `maxTime`           | `number`          | no       | Max physical simulation time; default 120 s      |
+| Field       | Type             | Required | Description                                      |
+|-------------|------------------|----------|--------------------------------------------------|
+| `origin`    | `[number, number]` | yes    | SW corner `[longitude, latitude]` in WGS84       |
+| `cellSize`  | `number`         | yes      | Cell size in meters (typically 15)                |
+| `rows`      | `integer`        | yes      | Number of rows (south→north). Range: 1–300       |
+| `cols`      | `integer`        | yes      | Number of columns (west→east). Range: 1–300      |
+| `elevation` | `number[]`       | yes      | Row-major flat array of elevations in meters. Length = `rows × cols`. `null` for invalid/missing cells (treated as walls). |
 
-### Validation rules
+**Grid layout:** Row 0 = southernmost, row N-1 = northernmost. Column 0 = westernmost.
+Maximum grid size: 300 × 300 = 90,000 cells.
 
-- `dem.cols * dem.rows` must not exceed 90,000.
-- `releaseCells` entries must be within grid bounds.
-- `snowDepthM > 0`, `frictionMu > 0`, `frictionXi > 0`, `density > 0`.
-- `entrainmentFactor >= 1.0` (1.0 = no entrainment).
+### `releaseCells` — Release Cell Coordinates
 
----
+| Field          | Type               | Required | Description                                |
+|----------------|--------------------|-----------|--------------------------------------------|
+| `releaseCells` | `[integer, integer][]` | yes  | Array of `[row, col]` pairs within the DEM |
 
-## Output (`GET /jobs/{id}/results`)
+Each pair must satisfy `0 ≤ row < rows` and `0 ≤ col < cols`. Cells with
+`null` elevation are skipped.
+
+### `startingZone` — Release Area Polygon
+
+Standard GeoJSON Polygon:
 
 ```jsonc
 {
-  "schemaVersion": 1,
+  "type": "Polygon",
+  "coordinates": [[[lng, lat], [lng, lat], ...]]  // exterior ring, closed
+}
+```
 
-  // --- Grid metadata (echo from input) ---
-  "origin": [lng, lat],
-  "cellSize": 15,
+### `snowDepthM` — Snow Depth
+
+| Field        | Type     | Required | Range  | Description               |
+|--------------|----------|----------|--------|---------------------------|
+| `snowDepthM` | `number` | yes      | > 0    | Snow depth in meters      |
+
+### `snowProfile` — Physical Snow Parameters
+
+| Field               | Type     | Required | Range       | Unit           | Description                           |
+|---------------------|----------|----------|-------------|----------------|---------------------------------------|
+| `id`                | `string` | yes      | —           | —              | Unique identifier                     |
+| `label`             | `string` | yes      | —           | —              | Display name                          |
+| `density`           | `number` | yes      | 80–450      | kg/m³          | Snow density                          |
+| `entrainmentFactor` | `number` | yes      | 1.0–4.0     | dimensionless  | Multiplier on initial volume          |
+| `frictionMu`        | `number` | yes      | 0.25–0.45   | dimensionless  | Coulomb friction coefficient          |
+| `frictionXi`        | `number` | yes      | 800–2000    | m/s²           | Turbulent friction coefficient        |
+
+### `regionCoefficients` — Alpha-Beta Model
+
+| Field    | Type     | Required | Description                                |
+|----------|----------|----------|--------------------------------------------|
+| `id`     | `string` | yes      | Unique identifier                          |
+| `label`  | `string` | yes      | Display name                               |
+| `a`      | `number` | yes      | Slope coefficient                          |
+| `b`      | `number` | yes      | Intercept (degrees)                        |
+| `sigma`  | `number` | yes      | Standard deviation (degrees)               |
+| `source` | `string` | yes      | Literature reference                       |
+
+Formula: `α = a·β + b − k·σ` where `k` depends on return period.
+
+### `primaryPath` — Primary Avalanche Path
+
+| Field             | Type             | Required | Description                              |
+|-------------------|------------------|----------|------------------------------------------|
+| `crownPoint`      | `ElevationPoint` | yes      | Release zone crown                       |
+| `betaPoint`       | `ElevationPoint` | yes      | 10° beta point                           |
+| `runoutPoint`     | `ElevationPoint` | yes      | Predicted runout                         |
+| `fallLineAzimuth` | `number`         | yes      | Downhill bearing (0–360°)                |
+| `betaAngle`       | `number`         | yes      | Slope angle at beta point (degrees)      |
+| `alphaAngle`      | `number`         | yes      | Runout angle (degrees)                   |
+| `profile`         | `ElevationPoint[]` | yes    | Full elevation profile crown→runout      |
+
+**`ElevationPoint` shape:**
+
+| Field               | Type               | Required | Description                          |
+|----------------------|--------------------|----------|--------------------------------------|
+| `lngLat`            | `[number, number]` | yes      | `[longitude, latitude]` WGS84       |
+| `elevation`         | `number`           | yes      | Meters above sea level               |
+| `distanceFromCrown` | `number`           | yes      | Cumulative horizontal distance (m)   |
+
+---
+
+## Output Schema
+
+Returned by `GET /jobs/{id}/results` when job status is `complete`.
+
+```jsonc
+{
+  "schemaVersion": 1,           // REQUIRED — must be 1
+  "origin": [lng, lat],         // Grid origin (SW corner)
+  "cellSize": 15,               // meters
   "cols": 200,
   "rows": 150,
-
-  // --- Result grids (row-major, length = rows × cols) ---
-  "deposition": [...],    // final flow depth in meters
-  "hMax":       [...],    // maximum flow depth at each cell (meters)
-  "vMax":       [...],    // maximum velocity at each cell (m/s)
-  "pMax":       [...],    // maximum impact pressure at each cell (kPa)
-  "cellCount":  [...],    // 1 if cell was reached (hMax > 1mm), else 0
-
-  // --- Solver metadata ---
-  "solverInfo": {
-    "type": "openfoam",
-    "simulationTime": 45.2,       // physical seconds simulated
-    "timeSteps": 312,
-    "wallClockSeconds": 23.4,     // actual compute time
-    "massConservation": 0.998,    // ratio final/initial mass
-    "massInitial": 12.5,          // meters (depth equivalent)
-    "massEntrained": 8.3,         // meters
-    "massDeposited": 20.6,        // meters
-    "massBalanceError": 0.002,    // relative error
-    "solverVersion": "v2312-abc1234"
-  }
+  "deposition": [0, 0, 0.5, ...],  // Deposition depth grid
+  "vMaxGrid": [0, 0, 12.3, ...],   // Max velocity grid
+  "pMaxGrid": [0, 0, 18.9, ...],   // Max impact pressure grid
+  "metadata": { ... }              // Solver run metadata
 }
 ```
 
-### Output field reference
+### Output Grid Fields
 
-| Field                          | Type       | Description                                            |
-| ------------------------------ | ---------- | ------------------------------------------------------ |
-| `deposition`                   | `number[]` | Final snow depth per cell (meters)                     |
-| `hMax`                         | `number[]` | Peak depth reached during simulation (meters)          |
-| `vMax`                         | `number[]` | Peak velocity per cell (m/s)                           |
-| `pMax`                         | `number[]` | Peak impact pressure per cell (kPa = 0.5·ρ·v²/1000)   |
-| `cellCount`                    | `integer[]`| Binary reach indicator (1 = reached, 0 = not)          |
-| `solverInfo.type`              | `string`   | Always `"openfoam"` for this solver                    |
-| `solverInfo.simulationTime`    | `number`   | Physical time simulated (seconds)                      |
-| `solverInfo.timeSteps`         | `number`   | Number of solver time steps                            |
-| `solverInfo.wallClockSeconds`  | `number`   | Wall-clock compute duration                            |
-| `solverInfo.massConservation`  | `number`   | Final/initial mass ratio (ideal = 1.0)                 |
-| `solverInfo.massInitial`       | `number`   | Total initial release mass (depth-equivalent meters)   |
-| `solverInfo.massEntrained`     | `number`   | Total entrained mass (depth-equivalent meters)         |
-| `solverInfo.massDeposited`     | `number`   | Total deposited mass (depth-equivalent meters)         |
-| `solverInfo.massBalanceError`  | `number`   | Relative mass balance error                            |
-| `solverInfo.solverVersion`     | `string`   | OpenFOAM version + solver commit                       |
+| Field        | Type       | Required | Unit    | Description                                              |
+|--------------|------------|----------|---------|----------------------------------------------------------|
+| `origin`     | `[number, number]` | yes | WGS84  | SW corner `[longitude, latitude]`                        |
+| `cellSize`   | `number`   | yes      | meters  | Cell size in meters                                      |
+| `cols`       | `integer`  | yes      | —       | Grid width (columns)                                     |
+| `rows`       | `integer`  | yes      | —       | Grid height (rows)                                       |
+| `deposition` | `number[]` | yes      | meters  | Deposition depth per cell. Flat row-major. Length = `rows × cols`. Values ≥ 0. |
+| `vMaxGrid`   | `number[]` | yes      | m/s     | Maximum velocity per cell during simulation. Values ≥ 0. |
+| `pMaxGrid`   | `number[]` | yes      | kPa     | Maximum impact pressure per cell (`0.5·ρ·v²/1000`). Values ≥ 0. |
 
-### Compatibility with existing UI
+### `metadata` — Solver Run Information
 
-The output maps directly to the app's `FlowPyGridResult` type:
+| Field              | Type     | Required | Description                                         |
+|--------------------|----------|----------|-----------------------------------------------------|
+| `solverVersion`    | `string` | yes      | Solver identifier and version (e.g. `"voellmy-2d@1.0"`) |
+| `runtime`          | `number` | yes      | Wall-clock solver execution time in seconds         |
+| `steps`            | `integer`| yes      | Number of timesteps executed                        |
+| `simulationTime`   | `number` | yes      | Simulated physical time in seconds                  |
+| `massConservation` | `number` | yes      | Ratio: `finalMass / initialMass` (expect ~0.8–1.0)  |
+| `massInitial`      | `number` | no       | Initial snow mass (m of depth summed across cells)  |
+| `massEntrained`    | `number` | no       | Total entrained mass (m)                            |
+| `massDeposited`    | `number` | no       | Total deposited mass (m)                            |
 
-| Schema field  | FlowPyGridResult field | Notes                              |
-| ------------- | ---------------------- | ---------------------------------- |
-| `deposition`  | `deposition`           | Direct: meters                     |
-| `hMax`        | `hMax`                 | Direct: meters                     |
-| `vMax`        | `vMaxGrid`             | Rename on load                     |
-| `pMax`        | `pMaxGrid`             | Rename on load                     |
-| `cellCount`   | `cellCount`            | Direct: cast to Uint16Array        |
-| `solverInfo`  | `solverInfo`           | Direct: `type = "openfoam"`        |
+---
 
-The legacy fields `zMaxDelta` and `rMax` are not produced by OpenFOAM. The UI already handles their absence when `solverInfo.type !== "flow-py"`.
+## Validation Rules
+
+### Required Fields
+
+All fields marked "yes" in the Required column above MUST be present. The
+solver service MUST reject input missing any required field with HTTP 400.
+
+### Value Ranges
+
+| Field                       | Constraint                                |
+|-----------------------------|-------------------------------------------|
+| `schemaVersion`             | Must equal `1`                            |
+| `dem.rows`, `dem.cols`      | Positive integers, each ≤ 300             |
+| `dem.rows × dem.cols`       | ≤ 90,000                                  |
+| `dem.elevation` length      | Must equal `rows × cols`                  |
+| `dem.elevation` values      | Finite numbers or `null`                  |
+| `dem.cellSize`              | > 0                                       |
+| `releaseCells` entries      | Each `[row, col]` within DEM bounds       |
+| `releaseCells` length       | ≥ 1                                       |
+| `snowDepthM`                | > 0                                       |
+| `snowProfile.density`       | 80–450 kg/m³                              |
+| `snowProfile.entrainmentFactor` | 1.0–4.0                               |
+| `snowProfile.frictionMu`    | 0.25–0.45                                 |
+| `snowProfile.frictionXi`    | 800–2000 m/s²                             |
+| `deposition` values         | ≥ 0                                       |
+| `vMaxGrid` values           | ≥ 0                                       |
+| `pMaxGrid` values           | ≥ 0                                       |
+| `metadata.massConservation` | > 0                                       |
+
+### Grid Array Encoding
+
+All grid arrays (`elevation`, `deposition`, `vMaxGrid`, `pMaxGrid`) are
+**flat row-major**: `array[row * cols + col]`. Row 0 = south, row N-1 = north.
+
+### Coordinate System
+
+All geographic coordinates use **WGS84** (EPSG:4326) as `[longitude, latitude]`.
