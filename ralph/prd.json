@@ -1,0 +1,182 @@
+{
+  "project": "avalanche-path-estimator",
+  "branchName": "ralph/openfoam-solver",
+  "description": "OpenFOAM Solver + Local Service + UI Integration — full end-to-end local OpenFOAM-based avalanche solver",
+  "constraints": [
+    "Localhost only — solver service binds to 127.0.0.1:8090",
+    "Single job at a time — reject if busy",
+    "Cleanup job workspace after completion",
+    "Schema version required on all input/output (schemaVersion = 1)"
+  ],
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Decisions and baselines",
+      "description": "As a developer, I need foundational decisions locked down before building anything — solver repo, container base, runtime constraints, and schema version.",
+      "acceptanceCriteria": [
+        "docs/solver/DECISIONS.md exists with: solver repo + pinned commit, OpenFOAM version, container base image",
+        "Runtime constraints documented: max domain size, grid resolution, expected runtime ceiling",
+        "Input schema version frozen at schemaVersion = 1",
+        "docs/solver/SCHEMA.md stub created with version field"
+      ],
+      "priority": 1,
+      "effort": "low",
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-002",
+      "title": "Solver container build",
+      "description": "As a developer, I need a Docker container that builds OpenFOAM + the avalanche solver and exposes a CLI entrypoint.",
+      "acceptanceCriteria": [
+        "solver/ directory exists with pinned solver repo (commit hash in Dockerfile or submodule)",
+        "solver/Dockerfile builds OpenFOAM + solver successfully",
+        "solver/entrypoint.sh wraps `avalancheSolver -case /case` with MPI support",
+        "Smoke test: `docker build` completes and `docker run` with a trivial case exits 0",
+        "solver/README.md documents build and run instructions"
+      ],
+      "priority": 2,
+      "effort": "high",
+      "passes": false,
+      "notes": "Depends on decisions from US-001"
+    },
+    {
+      "id": "US-003",
+      "title": "Input/output JSON schema",
+      "description": "As a developer, I need versioned input and output schemas so the Go service and UI agree on data shape.",
+      "acceptanceCriteria": [
+        "docs/solver/SCHEMA.md defines input JSON: DEM (origin, cellSize, rows, cols, elevation array), releaseCells, startingZone polygon, snow depth + profile, region coeffs, primaryPath",
+        "docs/solver/SCHEMA.md defines output JSON: deposition grid, vMax grid, pMax grid, metadata (solver version, runtime, steps)",
+        "Both schemas include schemaVersion = 1",
+        "docs/solver/sample_input.json is valid against the input schema",
+        "docs/solver/sample_output.json is valid against the output schema",
+        "Validation rules documented (required fields, value ranges)"
+      ],
+      "priority": 3,
+      "effort": "medium",
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-004",
+      "title": "Case template and parameter mapping",
+      "description": "As a developer, I need a case template that maps our JSON input into OpenFOAM case files so the solver can run.",
+      "acceptanceCriteria": [
+        "solver/case-template/ contains system/* and constant/* OpenFOAM case skeleton",
+        "solver/scripts/generate_case.py (or Go equivalent) reads input.json and populates case directory",
+        "Friction parameters, entrainment, run time, output fields are correctly mapped",
+        "DEM converted to solver's required terrain format",
+        "releaseCells converted to initial condition field",
+        "generate_case produces a runnable case from docs/solver/sample_input.json"
+      ],
+      "priority": 4,
+      "effort": "high",
+      "passes": false,
+      "notes": "Depends on US-003 schema"
+    },
+    {
+      "id": "US-005",
+      "title": "Go solver service (HTTP daemon)",
+      "description": "As a developer, I need a local Go HTTP service that accepts solver jobs, manages workspaces, and returns results.",
+      "acceptanceCriteria": [
+        "cmd/solverd/ contains main.go, service binds to 127.0.0.1:8090",
+        "POST /jobs accepts input JSON, creates job workspace (input.json, case/, outputs/), returns job ID",
+        "GET /jobs/{id} returns job status (queued | running | complete | failed)",
+        "GET /jobs/{id}/results returns result.json when complete",
+        "DELETE /jobs/{id} cancels a running job",
+        "Rejects new job if one is already running (single-job concurrency)",
+        "Job workspace cleaned up after result is retrieved or on cancel",
+        "Typecheck and tests pass"
+      ],
+      "priority": 5,
+      "effort": "high",
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-006",
+      "title": "Docker runner integration",
+      "description": "As a developer, I need the Go service to launch the solver container per job with correct volume mounts, MPI args, and log capture.",
+      "acceptanceCriteria": [
+        "internal/jobs/runner.go launches Docker container per job",
+        "Job directory mounted as /case in container",
+        "Runs `mpirun -np N avalancheSolver -case /case`",
+        "Stdout/stderr captured to job workspace logs",
+        "Non-zero exit code sets job status to failed with error message",
+        "Container removed after run completes",
+        "Tests pass"
+      ],
+      "priority": 6,
+      "effort": "medium",
+      "passes": false,
+      "notes": "Depends on US-002 (container) and US-005 (service)"
+    },
+    {
+      "id": "US-007",
+      "title": "Output conversion to app grid format",
+      "description": "As a developer, I need solver output (ASCII/GeoTIFF/NetCDF) converted to Float32 grids matching the app's FlowPyGridResult shape.",
+      "acceptanceCriteria": [
+        "internal/convert/output.go parses solver output files",
+        "Converts deposition, vMax, pMax to Float32 arrays",
+        "Writes result.json matching FlowPyGridResult shape (deposition, rMax/hMax, zMaxDelta/vMax, pMax grids + metadata)",
+        "Handles missing/partial output gracefully",
+        "docs/solver/output-format.md documents the mapping",
+        "Unit tests with sample solver output pass"
+      ],
+      "priority": 7,
+      "effort": "medium",
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-008",
+      "title": "UI integration — solver selector and job flow",
+      "description": "As a user, I want to choose between the internal Voellmy-2D solver and the local OpenFOAM solver, submit a job, see progress, and view results on the map.",
+      "acceptanceCriteria": [
+        "ControlPanel has solver selector: Internal (Voellmy-2D) | OpenFOAM (Local)",
+        "OpenFOAM mode submits job to localhost:8090, shows status (queued/running/complete/failed)",
+        "On completion, results load into existing FlowPy overlay (deposition heatmap, velocity, pressure)",
+        "Errors displayed clearly in ResultsDisplay",
+        "Typecheck passes",
+        "Manual browser verification: selector visible, job lifecycle works end-to-end"
+      ],
+      "priority": 8,
+      "effort": "medium",
+      "passes": false,
+      "notes": "Touches ControlPanel, ResultsDisplay, AvalancheMap, useAvalancheStore"
+    },
+    {
+      "id": "US-009",
+      "title": "Benchmark validation and calibration",
+      "description": "As a developer, I need to validate solver output against a known benchmark case to confirm correctness.",
+      "acceptanceCriteria": [
+        "One benchmark case from literature selected and documented",
+        "Benchmark input prepared and run through the full pipeline",
+        "Runout distance within acceptable tolerance of published result",
+        "Deposit extent and velocity qualitatively match",
+        "Parameter mapping adjusted if initial results diverge significantly",
+        "docs/solver/VALIDATION.md documents benchmark, results, and any adjustments"
+      ],
+      "priority": 9,
+      "effort": "medium",
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-010",
+      "title": "UX safety — warnings, timeouts, error handling",
+      "description": "As a user, I need clear warnings that the OpenFOAM solver is heavy/slow, and robust timeouts so nothing hangs forever.",
+      "acceptanceCriteria": [
+        "Warning displayed in UI when selecting OpenFOAM mode (heavy computation, may take minutes)",
+        "Job timeout configurable, default 5 minutes, kills container on expiry",
+        "Clear error messages for: Docker not running, container build missing, timeout, solver crash",
+        "Cancel button works during a running job",
+        "Typecheck passes"
+      ],
+      "priority": 10,
+      "effort": "low",
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}

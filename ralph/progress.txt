@@ -1,0 +1,11 @@
+## Codebase Patterns
+- Zustand store at `src/store/useAvalancheStore.ts` — all app state lives here
+- Solver results use `FlowPyGridResult` shape — deposition, hMax, vMax, pMax grids
+- `solverInfo.type` discriminant controls overlay behavior (e.g. 'voellmy-2d' vs 'openfoam')
+- Map overlays in `src/components/Map/` — FlowPyOverlay reads grid results from store
+- Tests: vitest for TS, co-located `*.test.ts` files
+- Go code should live under `cmd/solverd/` and `internal/`
+- Docker image name: TBD (set in US-001 decisions)
+
+---
+
