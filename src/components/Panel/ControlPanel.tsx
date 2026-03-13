@@ -58,6 +58,10 @@ export default function ControlPanel() {
           </select>
           {solverMode === "openfoam-local" && (
             <div className="space-y-2">
+              <div className="rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-700">
+                <span className="font-medium">Heavy computation.</span>{" "}
+                OpenFOAM runs in a Docker container and may take several minutes depending on terrain size.
+              </div>
               <label className="text-xs text-zinc-500">Local solver URL</label>
               <input
                 value={localSolverUrl}

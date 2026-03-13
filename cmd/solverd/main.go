@@ -28,7 +28,7 @@ func main() {
 		ProjectRoot: resolveProjectRoot(),
 		Image:       envOrDefault("SOLVERD_IMAGE", "opencfd/openfoam-dev:2312"),
 		NProcs:      envIntOrDefault("SOLVERD_NPROCS", 1),
-		TimeoutSec:  300,
+		TimeoutSec:  envIntOrDefault("SOLVERD_TIMEOUT", 300),
 	}
 
 	mgr := jobs.NewManager(workDir, runner.New(cfg))

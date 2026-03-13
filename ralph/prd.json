@@ -175,8 +175,8 @@
       ],
       "priority": 10,
       "effort": "low",
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Warning banner on OpenFOAM select, SOLVERD_TIMEOUT env (default 300s), error classification for Docker/timeout/image/crash, cancel button with server-side DELETE"
     }
   ]
 }

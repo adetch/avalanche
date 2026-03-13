@@ -11,6 +11,7 @@ export default function ResultsDisplay() {
   const solverMode = useAvalancheStore((s) => s.solverMode);
   const externalSolverStatus = useAvalancheStore((s) => s.externalSolverStatus);
   const externalSolverError = useAvalancheStore((s) => s.externalSolverError);
+  const cancelExternalJob = useAvalancheStore((s) => s.cancelExternalJob);
 
   if (isComputing) {
     return (
@@ -189,12 +190,20 @@ export default function ResultsDisplay() {
       {/* OpenFOAM solver status (shown independently of flowPy results) */}
       {solverMode === "openfoam-local" && externalSolverStatus === "running" && (
         <div className="rounded-md bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-700">
-          <div className="flex items-center gap-2">
-            <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-            </svg>
-            OpenFOAM solver running...
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+              OpenFOAM solver running...
+            </div>
+            <button
+              onClick={cancelExternalJob}
+              className="rounded px-2 py-1 text-xs font-medium text-amber-800 hover:bg-amber-100 transition-colors"
+            >
+              Cancel
+            </button>
           </div>
         </div>
       )}
