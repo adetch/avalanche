@@ -238,8 +238,12 @@ maxDeltaT       0.1;
 def generate_block_mesh_dict(dem: dict) -> str:
     """Generate system/blockMeshDict — flat bounding box mesh.
 
-    After blockMesh runs, the entrypoint runs a point-displacement step
-    to move the terrain patch vertices to follow the DEM elevation.
+    Creates cols*rows cells so the FA mesh face count matches the DEM grid
+    exactly.  After blockMesh runs, the entrypoint swaps in the pre-computed
+    displaced points file to follow DEM elevation.
+
+    Vertices: (cols+1)*(rows+1) per layer.
+    Cells:    cols * rows * 1.
     """
     rows, cols, cs = dem["rows"], dem["cols"], dem["cellSize"]
     elev = dem["elevation"]
@@ -248,11 +252,11 @@ def generate_block_mesh_dict(dem: dict) -> str:
     z_min = min(valid_elev) - 50.0
     z_max = max(valid_elev) + 100.0
 
-    x_max = (cols - 1) * cs
-    y_max = (rows - 1) * cs
+    x_max = cols * cs
+    y_max = rows * cs
 
-    nx = max(1, cols - 1)
-    ny = max(1, rows - 1)
+    nx = cols
+    ny = rows
     nz = 1
 
     return (
@@ -391,10 +395,10 @@ def generate_displaced_points(dem: dict, output_dir: Path) -> None:
     constant/polyMesh/points with this pre-computed version where
     the top-layer z-coordinates follow the DEM elevation.
 
-    blockMesh with nz=1 creates points in this order:
+    blockMesh with nx=cols, ny=rows, nz=1 creates points in this order:
     - Bottom layer (z=z_min): for j in 0..ny: for i in 0..nx: point(i*dx, j*dy, z_min)
     - Top layer (z=z_max):    for j in 0..ny: for i in 0..nx: point(i*dx, j*dy, z_max)
-    Total: 2 * (nx+1) * (ny+1) = 2 * cols * rows points
+    Total: 2 * (nx+1) * (ny+1) = 2 * (cols+1) * (rows+1) points
     """
     rows, cols, cs = dem["rows"], dem["cols"], dem["cellSize"]
     elev = dem["elevation"]
@@ -403,22 +407,26 @@ def generate_displaced_points(dem: dict, output_dir: Path) -> None:
     z_min = min(valid_elev) - 50.0
 
     def get_elev(r: int, c: int) -> float:
+        """Get DEM elevation, clamping to grid bounds for boundary vertices."""
+        r = max(0, min(r, rows - 1))
+        c = max(0, min(c, cols - 1))
         v = elev[r * cols + c]
         if v is None or (isinstance(v, float) and math.isnan(v)):
             return z_min + 25.0
         return float(v)
 
+    # Vertex grid is (cols+1) x (rows+1) per layer
     points: list[str] = []
     # Bottom layer
-    for r in range(rows):
-        for c in range(cols):
-            x, y = c * cs, r * cs
+    for j in range(rows + 1):
+        for i in range(cols + 1):
+            x, y = i * cs, j * cs
             points.append(f"({x} {y} {z_min})")
-    # Top layer — follow DEM
-    for r in range(rows):
-        for c in range(cols):
-            x, y = c * cs, r * cs
-            z = get_elev(r, c)
+    # Top layer — follow DEM (boundary vertices use nearest-neighbor)
+    for j in range(rows + 1):
+        for i in range(cols + 1):
+            x, y = i * cs, j * cs
+            z = get_elev(j, i)
             points.append(f"({x} {y} {z})")
 
     content = (
@@ -692,27 +700,20 @@ def generate_h_field(dem: dict, release_cells: list[list[int]], snow_depth: floa
 
     Sets h = snowDepthM at release cells, 0 elsewhere.
     The field is areaScalarField for finite-area method.
+
+    The blockMesh has cols*rows cells, so the terrain patch has cols*rows
+    faces.  Face index = r * cols + c, giving a direct 1:1 mapping with
+    the DEM grid.
     """
     rows, cols = dem["rows"], dem["cols"]
-    n_faces = (rows - 1) * (cols - 1)  # one quad face per blockMesh cell on terrain patch
+    n_faces = rows * cols
 
-    # Build a set of quads that contain release cells
-    release_set = set()
-    for rc in release_cells:
-        release_set.add((rc[0], rc[1]))
-
-    # Map release cells to quad face indices on the terrain patch.
-    # blockMesh produces (cols-1)*(rows-1) quad faces on the terrain patch.
-    # quad_idx = r * (cols-1) + c  (for r in 0..rows-2, c in 0..cols-2)
+    # Build release face set — direct 1:1 mapping with DEM grid
     release_face_indices: set[int] = set()
-    for r, c in release_set:
-        # A release cell (r, c) touches up to 4 quads:
-        # quad(r-1, c-1), quad(r-1, c), quad(r, c-1), quad(r, c)
-        for qr in (r - 1, r):
-            for qc in (c - 1, c):
-                if 0 <= qr < rows - 1 and 0 <= qc < cols - 1:
-                    qi = qr * (cols - 1) + qc
-                    release_face_indices.add(qi)
+    for rc in release_cells:
+        r, c = rc[0], rc[1]
+        if 0 <= r < rows and 0 <= c < cols:
+            release_face_indices.add(r * cols + c)
 
     # Build nonuniform field value list
     values = []

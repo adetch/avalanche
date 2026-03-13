@@ -130,22 +130,17 @@ func TestBenchmarkAnalyticalExpectations(t *testing.T) {
 // with physically plausible output (based on the Bartelt benchmark) and verifies
 // the output converter produces valid results.
 func TestBenchmarkOutputConversion(t *testing.T) {
-	nFaces := (bRows - 1) * (bCols - 1) // 195
+	nFaces := bRows * bCols // 240 — FA mesh matches DEM grid 1:1
 
 	vTerm := voellmyTerminalVelocity(bTrackDeg, bMu, bXi, bDepth)
 
 	// --- Initial h field ---
-	// Match generate_case.py: release cells [38,2],[38,3],[39,2],[39,3] map to
-	// quad faces via (r-1,r) × (c-1,c) clipped to [0,rows-2] × [0,cols-2].
+	// Direct 1:1 mapping: release cell (r, c) → face index r*cols + c.
 	releaseCells := [][2]int{{38, 2}, {38, 3}, {39, 2}, {39, 3}}
 	releaseFaces := map[int]bool{}
 	for _, rc := range releaseCells {
-		for _, qr := range []int{rc[0] - 1, rc[0]} {
-			for _, qc := range []int{rc[1] - 1, rc[1]} {
-				if qr >= 0 && qr < bRows-1 && qc >= 0 && qc < bCols-1 {
-					releaseFaces[qr*(bCols-1)+qc] = true
-				}
-			}
+		if rc[0] >= 0 && rc[0] < bRows && rc[1] >= 0 && rc[1] < bCols {
+			releaseFaces[rc[0]*bCols+rc[1]] = true
 		}
 	}
 
@@ -167,7 +162,7 @@ func TestBenchmarkOutputConversion(t *testing.T) {
 	var rawDep []float64
 	var rawTotal float64
 	for i := 0; i < nFaces; i++ {
-		faceRow := i / (bCols - 1)
+		faceRow := i / bCols
 		dep := 0.0
 		dist := float64(faceRow - bTransRow)
 		if faceRow >= bTransRow-4 && faceRow <= bTransRow+3 {
@@ -192,7 +187,7 @@ func TestBenchmarkOutputConversion(t *testing.T) {
 	// Represents peak velocities during the simulation (not final state).
 	var usLines []string
 	for i := 0; i < nFaces; i++ {
-		faceRow := i / (bCols - 1)
+		faceRow := i / bCols
 		vel := 0.0
 		if faceRow >= bTransRow && faceRow <= bRows-3 {
 			progress := float64(bRows-2-faceRow) / float64(bRows-2-bTransRow)

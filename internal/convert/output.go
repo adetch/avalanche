@@ -404,6 +404,10 @@ func ConvertOutput(caseDir string, density float64, wallClockSec float64) (*Conv
 	deposition := make([]float32, n)
 	hPath := filepath.Join(timeDir, "h")
 	if hValues, err := ParseOpenFOAMScalar(hPath); err == nil {
+		if len(hValues) > 1 && len(hValues) != n {
+			return nil, fmt.Errorf("h field has %d values but grid expects %d (cols=%d, rows=%d)",
+				len(hValues), n, grid.Cols, grid.Rows)
+		}
 		deposition = expandToFloat32(hValues, n)
 	}
 	// If missing, deposition stays zero — graceful handling
@@ -412,6 +416,10 @@ func ConvertOutput(caseDir string, density float64, wallClockSec float64) (*Conv
 	vMax := make([]float32, n)
 	usPath := filepath.Join(timeDir, "Us")
 	if vValues, err := ParseOpenFOAMVector(usPath); err == nil {
+		if len(vValues) > 1 && len(vValues) != n {
+			return nil, fmt.Errorf("Us field has %d values but grid expects %d (cols=%d, rows=%d)",
+				len(vValues), n, grid.Cols, grid.Rows)
+		}
 		vMax = expandToFloat32(vValues, n)
 	}
 
@@ -421,7 +429,7 @@ func ConvertOutput(caseDir string, density float64, wallClockSec float64) (*Conv
 		pMax[i] = float32(0.5 * float64(density) * float64(v) * float64(v) / 1000.0)
 	}
 
-	// Compute mass conservation
+	// Compute mass conservation (sum of h values, proportional to volume)
 	var massDeposited float64
 	for _, d := range deposition {
 		massDeposited += float64(d)
@@ -454,6 +462,11 @@ func ConvertOutput(caseDir string, density float64, wallClockSec float64) (*Conv
 		}
 	}
 
+	// Plausibility checks
+	if err := validatePlausibility(deposition, vMax, meta); err != nil {
+		return nil, fmt.Errorf("plausibility check failed: %w", err)
+	}
+
 	return &ConvertResult{
 		Grid:       grid,
 		Deposition: deposition,
@@ -483,6 +496,57 @@ func expandToFloat32(values []float64, n int) []float32 {
 		out[i] = float32(values[i])
 	}
 	return out
+}
+
+// validatePlausibility performs basic sanity checks on solver output.
+// Returns an error if results are physically implausible.
+func validatePlausibility(deposition, vMax []float32, meta ResultMeta) error {
+	// Check for non-zero deposition (solver must have produced some flow)
+	var nonZero int
+	var maxH float32
+	for _, d := range deposition {
+		if d > 0 {
+			nonZero++
+		}
+		if d > maxH {
+			maxH = d
+		}
+		if d < 0 {
+			return fmt.Errorf("negative deposition depth: %f m", d)
+		}
+	}
+	if nonZero == 0 {
+		return fmt.Errorf("no non-zero deposition cells — solver produced no flow")
+	}
+
+	// Peak depth > 100m is physically implausible for any avalanche
+	if maxH > 100 {
+		return fmt.Errorf("peak deposition depth %f m exceeds 100 m", maxH)
+	}
+
+	// Check velocity plausibility (world record avalanche speed ~125 m/s)
+	var maxV float32
+	for _, v := range vMax {
+		if v > maxV {
+			maxV = v
+		}
+		if v < 0 {
+			return fmt.Errorf("negative velocity magnitude: %f m/s", v)
+		}
+	}
+	if maxV > 200 {
+		return fmt.Errorf("peak velocity %f m/s exceeds 200 m/s", maxV)
+	}
+
+	// Mass conservation: with entrainment off, deposited <= 1.5 * initial
+	// (some mass exits domain through open boundaries, but it can't grow much)
+	// With entrainment on, allow up to 5x growth.
+	if meta.MassInitial > 0 && meta.MassConservation > 5.0 {
+		return fmt.Errorf("mass balance ratio %.2f exceeds 5.0 (initial=%.2f, deposited=%.2f)",
+			meta.MassConservation, meta.MassInitial, meta.MassDeposited)
+	}
+
+	return nil
 }
 
 // countTimeSteps counts the number of time directories (excluding "0") in a case.
