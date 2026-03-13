@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -15,9 +16,27 @@ import (
 	"github.com/adetchells/avalanche-path-estimator/internal/schema"
 )
 
-// instantRunner completes immediately using the stub from main.go.
-func instantRunner(ctx context.Context, workDir string, input *schema.Input) error {
-	return stubRunner(ctx, workDir, input)
+// instantRunner writes a minimal result.json and completes immediately.
+func instantRunner(_ context.Context, workDir string, input *schema.Input) error {
+	result := schema.Output{
+		SchemaVersion: 1,
+		Origin:        input.DEM.Origin,
+		CellSize:      input.DEM.CellSize,
+		Cols:          input.DEM.Cols,
+		Rows:          input.DEM.Rows,
+		Deposition:    make([]float64, input.DEM.Rows*input.DEM.Cols),
+		VMaxGrid:      make([]float64, input.DEM.Rows*input.DEM.Cols),
+		PMaxGrid:      make([]float64, input.DEM.Rows*input.DEM.Cols),
+		Metadata: schema.Metadata{
+			SolverVersion:    "stub@0.0",
+			Runtime:          0,
+			Steps:            0,
+			SimulationTime:   0,
+			MassConservation: 1.0,
+		},
+	}
+	data, _ := json.Marshal(result)
+	return os.WriteFile(filepath.Join(workDir, "outputs", "result.json"), data, 0o644)
 }
 
 // slowRunner blocks until cancelled.
