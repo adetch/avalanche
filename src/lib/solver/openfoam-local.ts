@@ -53,7 +53,7 @@ export async function runOpenFoamLocal(
   baseUrl: string,
   signal?: AbortSignal
 ): Promise<FlowPyGridResult> {
-  const downslopeExtent = Math.max(primaryPath.horizontalRunout * 1.5, 2000);
+  const downslopeExtent = Math.max(primaryPath.runoutPoint.distanceFromCrown * 1.5, 2000);
   const dem = buildVirtualDEM(
     map,
     startingZone,
