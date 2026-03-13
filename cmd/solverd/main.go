@@ -1,18 +1,18 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"syscall"
 
 	"github.com/adetchells/avalanche-path-estimator/internal/jobs"
+	"github.com/adetchells/avalanche-path-estimator/internal/runner"
 	"github.com/adetchells/avalanche-path-estimator/internal/schema"
 )
 
@@ -24,7 +24,14 @@ func main() {
 		log.Fatalf("create work dir: %v", err)
 	}
 
-	mgr := jobs.NewManager(workDir, stubRunner)
+	cfg := runner.Config{
+		ProjectRoot: resolveProjectRoot(),
+		Image:       envOrDefault("SOLVERD_IMAGE", "opencfd/openfoam-dev:2312"),
+		NProcs:      envIntOrDefault("SOLVERD_NPROCS", 1),
+		TimeoutSec:  300,
+	}
+
+	mgr := jobs.NewManager(workDir, runner.New(cfg))
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /jobs", postJobHandler(mgr))
@@ -53,31 +60,41 @@ func main() {
 	}
 }
 
-// stubRunner is a placeholder that immediately marks the job as complete.
-// US-006 will replace this with the Docker runner.
-func stubRunner(ctx context.Context, workDir string, input *schema.Input) error {
-	result := schema.Output{
-		SchemaVersion: 1,
-		Origin:        input.DEM.Origin,
-		CellSize:      input.DEM.CellSize,
-		Cols:          input.DEM.Cols,
-		Rows:          input.DEM.Rows,
-		Deposition:    make([]float64, input.DEM.Rows*input.DEM.Cols),
-		VMaxGrid:      make([]float64, input.DEM.Rows*input.DEM.Cols),
-		PMaxGrid:      make([]float64, input.DEM.Rows*input.DEM.Cols),
-		Metadata: schema.Metadata{
-			SolverVersion:    "stub@0.0",
-			Runtime:          0,
-			Steps:            0,
-			SimulationTime:   0,
-			MassConservation: 1.0,
-		},
+// resolveProjectRoot finds the repository root by checking SOLVERD_PROJECT_ROOT
+// or walking up from the working directory looking for solver/scripts/.
+func resolveProjectRoot() string {
+	if root := os.Getenv("SOLVERD_PROJECT_ROOT"); root != "" {
+		return root
 	}
-	data, err := json.Marshal(result)
-	if err != nil {
-		return fmt.Errorf("marshal result: %w", err)
+	dir, _ := os.Getwd()
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "solver", "scripts", "generate_case.py")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
 	}
-	return os.WriteFile(filepath.Join(workDir, "outputs", "result.json"), data, 0o644)
+	log.Fatal("cannot find project root; set SOLVERD_PROJECT_ROOT")
+	return ""
+}
+
+func envOrDefault(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
+func envIntOrDefault(key string, fallback int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return fallback
 }
 
 func postJobHandler(mgr *jobs.Manager) http.HandlerFunc {
