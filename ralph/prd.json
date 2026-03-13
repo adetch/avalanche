@@ -159,8 +159,8 @@
       ],
       "priority": 9,
       "effort": "medium",
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Bartelt et al. (1999) idealized 2-segment track benchmark. Terminal velocity 15.0 m/s, runout 51 m (3.4 cells). All tolerances met."
     },
     {
       "id": "US-010",
