@@ -6,37 +6,43 @@ FoamFile
     object      faSchemes;
 }
 
-// Finite-area discretisation for depth-averaged shallow-water equations
-// with Voellmy friction (Coulomb + turbulent drag).
-
 ddtSchemes
 {
-    default         Euler;
+    ddt(hentrain) backward;
+    ddt(h,Us) backward;
+    ddt(h) backward;
+    ddt(loss) backward;
 }
 
 gradSchemes
 {
-    default         Gauss linear;
+    default Gauss linear;
 }
 
 divSchemes
 {
-    default         none;
-    div(phis,h)     Gauss upwind;
-    div(phis,Us)    Gauss upwind;
+    default             none;
+    div(phis,h)         Gauss upwind;
+    div(phi2s,Us)       Gauss upwind;
 }
 
 laplacianSchemes
 {
-    default         Gauss linear corrected;
+    default none;
+    laplacian(h) Gauss linear corrected;
 }
 
 interpolationSchemes
 {
-    default         linear;
+    default linear;
 }
 
-lnGradSchemes
+snGradSchemes
 {
-    default         corrected;
+    default corrected;
+}
+
+fluxRequired
+{
+    h;
 }

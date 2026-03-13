@@ -5,17 +5,3 @@ FoamFile
     class       dictionary;
     object      fvSolution;
 }
-
-// Finite-volume solver settings — minimal for the base mesh.
-// The shallow-water equations are solved on the finite-area mesh.
-
-solvers
-{
-    ".*"
-    {
-        solver          PCG;
-        preconditioner  DIC;
-        tolerance       1e-06;
-        relTol          0.01;
-    }
-}

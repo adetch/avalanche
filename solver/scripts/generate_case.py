@@ -203,9 +203,9 @@ def generate_control_dict(dem: dict, path_data: dict | None) -> str:
     return (
         foam_header("ascii", "dictionary", "controlDict")
         + f"""
-application     avalancheFoam;
+application     faSavageHutterFoam;
 
-startFrom       startTime;
+startFrom       latestTime;
 startTime       0;
 
 stopAt          endTime;
@@ -228,26 +228,19 @@ timePrecision   6;
 runTimeModifiable yes;
 
 adjustTimeStep  yes;
-maxCo           0.5;
-maxDeltaT       1.0;
-
-functions
-{{
-    fieldMinMax
-    {{
-        type            fieldMinMax;
-        libs            ("libfieldFunctionObjects.so");
-        fields          ( h Us );
-        writeControl    timeStep;
-        writeInterval   1;
-    }}
-}}
+initDeltaT      yes;
+maxCo           1.0;
+maxDeltaT       0.1;
 """
     )
 
 
 def generate_block_mesh_dict(dem: dict) -> str:
-    """Generate system/blockMeshDict — bounding box enclosing the terrain."""
+    """Generate system/blockMeshDict — flat bounding box mesh.
+
+    After blockMesh runs, the entrypoint runs a point-displacement step
+    to move the terrain patch vertices to follow the DEM elevation.
+    """
     rows, cols, cs = dem["rows"], dem["cols"], dem["cellSize"]
     elev = dem["elevation"]
 
@@ -258,7 +251,6 @@ def generate_block_mesh_dict(dem: dict) -> str:
     x_max = (cols - 1) * cs
     y_max = (rows - 1) * cs
 
-    # Mesh cells: 1 cell per DEM cell in x/y, 1 cell in z (thin slab for FA)
     nx = max(1, cols - 1)
     ny = max(1, rows - 1)
     nz = 1
@@ -323,6 +315,323 @@ boundary
     )
 
 
+def generate_terrain_displacement_script(dem: dict) -> str:
+    """Generate a Python script that moves terrain patch points to follow DEM elevation.
+
+    This runs inside the container after blockMesh to deform the flat mesh.
+    """
+    rows, cols, cs = dem["rows"], dem["cols"], dem["cellSize"]
+    elev = dem["elevation"]
+
+    # Build elevation lookup: for each (x, y) grid point, the target z
+    elev_map = {}
+    for r in range(rows):
+        for c in range(cols):
+            v = elev[r * cols + c]
+            if v is not None and not (isinstance(v, float) and math.isnan(v)):
+                x, y = round(c * cs, 4), round(r * cs, 4)
+                elev_map[f"{x},{y}"] = float(v)
+
+    lines = [
+        "#!/usr/bin/env python3",
+        '"""Move terrain patch vertices to DEM elevations in an OpenFOAM polyMesh."""',
+        "import os, re, sys",
+        "",
+        "case_dir = sys.argv[1] if len(sys.argv) > 1 else '/case'",
+        "points_path = os.path.join(case_dir, 'constant', 'polyMesh', 'points')",
+        "",
+        "# DEM elevation lookup",
+        "elev = {",
+    ]
+    for key, z in elev_map.items():
+        lines.append(f'    "{key}": {z},')
+    lines += [
+        "}",
+        "",
+        "# Read points file",
+        "with open(points_path) as f:",
+        "    content = f.read()",
+        "",
+        "# Find the points list",
+        "m = re.search(r'\\n(\\d+)\\n\\(\\n', content)",
+        "if not m:",
+        "    print('ERROR: cannot parse points file'); sys.exit(1)",
+        "",
+        "header = content[:m.start() + 1]",
+        "n_points = int(m.group(1))",
+        "rest = content[m.end():]",
+        "end_idx = rest.index('\\n)\\n')",
+        "points_text = rest[:end_idx]",
+        "footer = rest[end_idx:]",
+        "",
+        "# Parse and modify points",
+        "new_points = []",
+        "for line in points_text.strip().split('\\n'):",
+        "    line = line.strip().strip('()')",
+        "    x, y, z = [float(v) for v in line.split()]",
+        "    key = f'{round(x,4)},{round(y,4)}'",
+        "    if key in elev:",
+        "        z = elev[key]",
+        "    new_points.append(f'({x} {y} {z})')",
+        "",
+        "with open(points_path, 'w') as f:",
+        "    f.write(header + str(n_points) + '\\n(\\n')",
+        "    f.write('\\n'.join(new_points))",
+        "    f.write(footer)",
+        "",
+        "print(f'Displaced {len(elev)} terrain points')",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def generate_displaced_points(dem: dict, output_dir: Path) -> None:
+    """Pre-generate the displaced points file for the terrain-following mesh.
+
+    After blockMesh creates a flat mesh, the entrypoint replaces
+    constant/polyMesh/points with this pre-computed version where
+    the top-layer z-coordinates follow the DEM elevation.
+
+    blockMesh with nz=1 creates points in this order:
+    - Bottom layer (z=z_min): for j in 0..ny: for i in 0..nx: point(i*dx, j*dy, z_min)
+    - Top layer (z=z_max):    for j in 0..ny: for i in 0..nx: point(i*dx, j*dy, z_max)
+    Total: 2 * (nx+1) * (ny+1) = 2 * cols * rows points
+    """
+    rows, cols, cs = dem["rows"], dem["cols"], dem["cellSize"]
+    elev = dem["elevation"]
+
+    valid_elev = [e for e in elev if e is not None and not (isinstance(e, float) and math.isnan(e))]
+    z_min = min(valid_elev) - 50.0
+
+    def get_elev(r: int, c: int) -> float:
+        v = elev[r * cols + c]
+        if v is None or (isinstance(v, float) and math.isnan(v)):
+            return z_min + 25.0
+        return float(v)
+
+    points: list[str] = []
+    # Bottom layer
+    for r in range(rows):
+        for c in range(cols):
+            x, y = c * cs, r * cs
+            points.append(f"({x} {y} {z_min})")
+    # Top layer — follow DEM
+    for r in range(rows):
+        for c in range(cols):
+            x, y = c * cs, r * cs
+            z = get_elev(r, c)
+            points.append(f"({x} {y} {z})")
+
+    content = (
+        foam_header("ascii", "vectorField", "points")
+        + f"\n{len(points)}\n(\n"
+        + "\n".join(points)
+        + "\n)\n"
+    )
+
+    displaced_dir = output_dir / "displaced"
+    displaced_dir.mkdir(exist_ok=True)
+    (displaced_dir / "points").write_text(content)
+
+
+def _unused_generate_poly_mesh(dem: dict, output_dir: Path) -> None:
+    """[UNUSED] Generate constant/polyMesh/ directly with terrain-following top face.
+
+    Creates a single-layer hex mesh where the top vertices follow DEM elevation,
+    so the finite-area mesh on the terrain patch captures real slope gradients.
+    """
+    rows, cols, cs = dem["rows"], dem["cols"], dem["cellSize"]
+    elev = dem["elevation"]
+
+    valid_elev = [e for e in elev if e is not None and not (isinstance(e, float) and math.isnan(e))]
+    z_offset = min(valid_elev) - 10.0  # ground layer below terrain
+
+    def get_elev(r: int, c: int) -> float:
+        v = elev[r * cols + c]
+        if v is None or (isinstance(v, float) and math.isnan(v)):
+            return z_offset + 5.0  # fallback for NaN
+        return float(v)
+
+    # Vertices: bottom layer (rows*cols) + top layer (rows*cols)
+    # bottom[r*cols+c] at (c*cs, r*cs, z_offset)
+    # top[r*cols+c]    at (c*cs, r*cs, elev[r,c])
+    n_pts = rows * cols
+    points: list[str] = []
+    for r in range(rows):
+        for c in range(cols):
+            x, y = c * cs, r * cs
+            points.append(f"({x} {y} {z_offset})")
+    for r in range(rows):
+        for c in range(cols):
+            x, y = c * cs, r * cs
+            z = get_elev(r, c)
+            points.append(f"({x} {y} {z})")
+
+    # Cells: (rows-1)*(cols-1) hexahedra
+    nr, nc = rows - 1, cols - 1
+    n_cells = nr * nc
+
+    # Face enumeration:
+    # Internal faces (vertical internal walls between cells):
+    #   - x-direction internal: (nc-1)*nr faces
+    #   - y-direction internal: nc*(nr-1) faces
+    # Boundary faces:
+    #   terrain: nr*nc top faces
+    #   ground:  nr*nc bottom faces
+    #   sides:   2*nr + 2*nc side faces
+    n_internal_x = (nc - 1) * nr
+    n_internal_y = nc * (nr - 1)
+    n_internal = n_internal_x + n_internal_y
+    n_terrain = n_cells
+    n_ground = n_cells
+    n_sides = 2 * nr + 2 * nc
+
+    def bot(r: int, c: int) -> int:
+        return r * cols + c
+
+    def top(r: int, c: int) -> int:
+        return n_pts + r * cols + c
+
+    def cell_idx(r: int, c: int) -> int:
+        return r * nc + c
+
+    faces: list[str] = []
+    owner: list[int] = []
+    neighbour: list[int] = []
+
+    # OpenFOAM face orientation rules:
+    # - Internal faces: normal points from owner (lower index) to neighbour (higher index)
+    # - Boundary faces: normal points outward from the cell
+    # Face normal = right-hand rule on vertex ordering (CCW when viewed from normal direction)
+
+    # Internal faces in x-direction (between cell(r,c) and cell(r,c+1))
+    # Normal should point in +x direction (from cell(r,c) to cell(r,c+1))
+    for r in range(nr):
+        for c in range(nc - 1):
+            # Face at x = (c+1)*cs, normal in +x: vertices CCW when viewed from +x
+            f = [bot(r, c + 1), top(r, c + 1), top(r + 1, c + 1), bot(r + 1, c + 1)]
+            faces.append(f"4({f[0]} {f[1]} {f[2]} {f[3]})")
+            owner.append(cell_idx(r, c))
+            neighbour.append(cell_idx(r, c + 1))
+
+    # Internal faces in y-direction (between cell(r,c) and cell(r+1,c))
+    # Normal should point in +y direction (from cell(r,c) to cell(r+1,c))
+    for r in range(nr - 1):
+        for c in range(nc):
+            # Face at y = (r+1)*cs, normal in +y: vertices CCW when viewed from +y
+            f = [bot(r + 1, c), bot(r + 1, c + 1), top(r + 1, c + 1), top(r + 1, c)]
+            faces.append(f"4({f[0]} {f[1]} {f[2]} {f[3]})")
+            owner.append(cell_idx(r, c))
+            neighbour.append(cell_idx(r + 1, c))
+
+    # Terrain faces (top of each cell) — outward normal points up
+    # CCW when viewed from above (+z direction)
+    for r in range(nr):
+        for c in range(nc):
+            f = [top(r, c), top(r + 1, c), top(r + 1, c + 1), top(r, c + 1)]
+            faces.append(f"4({f[0]} {f[1]} {f[2]} {f[3]})")
+            owner.append(cell_idx(r, c))
+
+    # Ground faces (bottom of each cell) — outward normal points down (-z)
+    # CCW when viewed from below (-z direction)
+    for r in range(nr):
+        for c in range(nc):
+            f = [bot(r, c), bot(r, c + 1), bot(r + 1, c + 1), bot(r + 1, c)]
+            faces.append(f"4({f[0]} {f[1]} {f[2]} {f[3]})")
+            owner.append(cell_idx(r, c))
+
+    # Side faces — outward normals point away from domain
+    # minY (r=0): normal in -y direction, CCW when viewed from -y
+    for c in range(nc):
+        f = [bot(0, c), top(0, c), top(0, c + 1), bot(0, c + 1)]
+        faces.append(f"4({f[0]} {f[1]} {f[2]} {f[3]})")
+        owner.append(cell_idx(0, c))
+    # maxY (r=nr): normal in +y direction, CCW when viewed from +y
+    for c in range(nc):
+        f = [bot(nr, c), bot(nr, c + 1), top(nr, c + 1), top(nr, c)]
+        faces.append(f"4({f[0]} {f[1]} {f[2]} {f[3]})")
+        owner.append(cell_idx(nr - 1, c))
+    # minX (c=0): normal in -x direction, CCW when viewed from -x
+    for r in range(nr):
+        f = [bot(r, 0), bot(r + 1, 0), top(r + 1, 0), top(r, 0)]
+        faces.append(f"4({f[0]} {f[1]} {f[2]} {f[3]})")
+        owner.append(cell_idx(r, 0))
+    # maxX (c=nc): normal in +x direction, CCW when viewed from +x
+    for r in range(nr):
+        f = [bot(r, nc), top(r, nc), top(r + 1, nc), bot(r + 1, nc)]
+        faces.append(f"4({f[0]} {f[1]} {f[2]} {f[3]})")
+        owner.append(cell_idx(r, nc - 1))
+
+    n_faces_total = len(faces)
+
+    # Write polyMesh files
+    mesh_dir = output_dir / "constant" / "polyMesh"
+    mesh_dir.mkdir(parents=True, exist_ok=True)
+
+    # points
+    (mesh_dir / "points").write_text(
+        foam_header("ascii", "vectorField", "points")
+        + f"\n{len(points)}\n(\n"
+        + "\n".join(points)
+        + "\n)\n"
+    )
+
+    # faces
+    (mesh_dir / "faces").write_text(
+        foam_header("ascii", "faceList", "faces")
+        + f"\n{n_faces_total}\n(\n"
+        + "\n".join(faces)
+        + "\n)\n"
+    )
+
+    # owner
+    (mesh_dir / "owner").write_text(
+        foam_header("ascii", "labelList", "owner")
+        + f"\n{n_faces_total}\n(\n"
+        + "\n".join(str(o) for o in owner)
+        + "\n)\n"
+    )
+
+    # neighbour (only internal faces)
+    (mesh_dir / "neighbour").write_text(
+        foam_header("ascii", "labelList", "neighbour")
+        + f"\n{n_internal}\n(\n"
+        + "\n".join(str(n) for n in neighbour)
+        + "\n)\n"
+    )
+
+    # boundary
+    terrain_start = n_internal
+    ground_start = terrain_start + n_terrain
+    sides_start = ground_start + n_ground
+
+    (mesh_dir / "boundary").write_text(
+        foam_header("ascii", "polyBoundaryMesh", "boundary")
+        + f"""
+3
+(
+    terrain
+    {{
+        type            wall;
+        nFaces          {n_terrain};
+        startFace       {terrain_start};
+    }}
+    ground
+    {{
+        type            wall;
+        nFaces          {n_ground};
+        startFace       {ground_start};
+    }}
+    sides
+    {{
+        type            patch;
+        nFaces          {n_sides};
+        startFace       {sides_start};
+    }}
+)
+"""
+    )
+
+
 def generate_decompose_par_dict(n_procs: int = 4) -> str:
     """Generate system/decomposeParDict for scotch decomposition."""
     return (
@@ -336,7 +645,11 @@ method          scotch;
 
 
 def generate_transport_properties(snow_profile: dict, entrainment_factor: float) -> str:
-    """Generate constant/transportProperties with Voellmy parameters."""
+    """Generate constant/transportProperties with Voellmy parameters.
+
+    Format must match faSavageHutterFoam expectations:
+    frictionModel, entrainmentModel, depositionModel, and VoellmyCoeffs block.
+    """
     mu = snow_profile["frictionMu"]
     xi = snow_profile["frictionXi"]
     density = snow_profile["density"]
@@ -344,20 +657,32 @@ def generate_transport_properties(snow_profile: dict, entrainment_factor: float)
     return (
         foam_header("ascii", "dictionary", "transportProperties")
         + f"""
-// Voellmy friction model parameters
-// mu  — Coulomb (dry) friction coefficient  [dimensionless]
-// xi  — turbulent friction coefficient      [m/s^2]
-mu              mu  [ 0 0 0 0 0 0 0 ] {mu};
-xi              xi  [ 0 1 -2 0 0 0 0 ] {xi};
+pressureFeedback    off;
 
-// Snow properties
-rho             rho [ 1 -3 0 0 0 0 0 ] {density};
+explicitDryAreas    on;
 
-// Entrainment
-entrainmentFactor   entrainmentFactor [ 0 0 0 0 0 0 0 ] {entrainment_factor};
+xi                  xi     [ 0 0 0 0 0 0 0]     1;
 
-// Minimum flow depth below which friction is clamped
-hMin            hMin [ 0 1 0 0 0 0 0 ] 0.001;
+hmin                hmin   [ 0 1 0 0 0 0 0]     0;
+
+rho                 rho    [ 1 -3  0 0 0 0 0 ]  {density:.1f};
+
+u0                  u0     [ 0 1 -1 0 0 0 0]    1e-4;
+
+h0                  h0     [ 0 1 0 0 0 0 0]     1e-6;
+
+frictionModel       Voellmy;
+
+entrainmentModel    entrainmentOff;
+
+depositionModel     depositionOff;
+
+VoellmyCoeffs
+{{
+    mu              mu    [0 0 0 0 0 0 0 ]      {mu};
+
+    xi              xi    [0 1 -2 0 0 0 0 ]     {xi};
+}}
 """
     )
 
@@ -497,23 +822,24 @@ def generate_case(
     shutil.copytree(template_dir, output_dir)
 
     # Create subdirectories for generated files
-    (output_dir / "constant" / "triSurface").mkdir(parents=True, exist_ok=True)
     (output_dir / "0").mkdir(parents=True, exist_ok=True)
 
     # Copy input.json into case for provenance
     shutil.copy2(input_path, output_dir / "input.json")
 
-    # --- Generate terrain STL ---
-    stl_bytes = dem_to_stl_binary(dem)
-    (output_dir / "constant" / "triSurface" / "terrain.stl").write_bytes(stl_bytes)
-
     # --- Generate system files ---
-    (output_dir / "system" / "controlDict").write_text(
-        generate_control_dict(dem, primary_path)
-    )
     (output_dir / "system" / "blockMeshDict").write_text(
         generate_block_mesh_dict(dem)
     )
+    (output_dir / "system" / "controlDict").write_text(
+        generate_control_dict(dem, primary_path)
+    )
+
+    # --- Pre-generate displaced points file ---
+    # blockMesh will create constant/polyMesh/points with flat terrain.
+    # We pre-compute the terrain-following points and save them; the entrypoint
+    # swaps them in after blockMesh runs.
+    generate_displaced_points(dem, output_dir)
     (output_dir / "system" / "decomposeParDict").write_text(
         generate_decompose_par_dict(n_procs)
     )
