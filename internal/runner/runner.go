@@ -38,7 +38,7 @@ type Config struct {
 
 func applyDefaults(cfg *Config) {
 	if cfg.Image == "" {
-		cfg.Image = "opencfd/openfoam-dev:2312"
+		cfg.Image = "avalanche-solver"
 	}
 	if cfg.NProcs < 1 {
 		cfg.NProcs = 1
@@ -98,29 +98,23 @@ func run(ctx context.Context, cfg Config, workDir string, input *schema.Input) e
 	}
 
 	// Step 3: Run solver in Docker container.
+	// The avalanche-solver image entrypoint handles the full pipeline:
+	// slopeMesh/blockMesh → makeFaMesh → releaseAreaMapping → solver.
 	containerName := fmt.Sprintf("solverd-%s", filepath.Base(workDir))
 
-	var solverCmd string
-	if cfg.NProcs > 1 {
-		solverCmd = fmt.Sprintf(
-			"cd /case && decomposePar && mpirun -np %d %s -parallel && reconstructPar",
-			cfg.NProcs, cfg.SolverBinary,
-		)
-	} else {
-		solverCmd = fmt.Sprintf("cd /case && %s", cfg.SolverBinary)
+	dockerArgs := []string{
+		"run", "--rm",
+		"--name", containerName,
+		"-v", caseDir + ":/case",
+		"-e", fmt.Sprintf("NP=%d", cfg.NProcs),
 	}
+	dockerArgs = append(dockerArgs, cfg.Image)
 
 	dockerCtx, dockerCancel := context.WithTimeout(ctx, time.Duration(cfg.TimeoutSec)*time.Second)
 	defer dockerCancel()
 
 	var dockerOut, dockerErr bytes.Buffer
-	err = cfg.Exec.Run(dockerCtx, "docker", []string{
-		"run", "--rm",
-		"--name", containerName,
-		"-v", caseDir + ":/case",
-		cfg.Image,
-		"bash", "-c", solverCmd,
-	}, workDir, nil, &dockerOut, &dockerErr)
+	err = cfg.Exec.Run(dockerCtx, "docker", dockerArgs, workDir, nil, &dockerOut, &dockerErr)
 	if err != nil {
 		if ctx.Err() != nil {
 			stopContainer(cfg.Exec, containerName)

@@ -6,7 +6,7 @@ import { buildVirtualDEM, identifyReleaseCells } from "@/lib/geo/virtual-dem";
 type JobStatus = "queued" | "running" | "complete" | "failed";
 
 interface JobCreateResponse {
-  jobId: string;
+  id: string;
 }
 
 interface JobStatusResponse {
@@ -14,11 +14,28 @@ interface JobStatusResponse {
   error?: string;
 }
 
-interface JobResultResponse {
-  flowPy: FlowPyGridResult;
+interface ServerResult {
+  origin: [number, number];
+  cellSize: number;
+  cols: number;
+  rows: number;
+  deposition: number[];
+  vMaxGrid: number[];
+  pMaxGrid: number[];
+  metadata: {
+    solverVersion: string;
+    runtime: number;
+    steps: number;
+    simulationTime: number;
+    massConservation: number;
+    massInitial?: number;
+    massEntrained?: number;
+    massDeposited?: number;
+  };
 }
 
 interface OpenFoamJobPayload {
+  schemaVersion: number;
   dem: {
     origin: [number, number];
     cellSize: number;
@@ -30,7 +47,7 @@ interface OpenFoamJobPayload {
   startingZone: Polygon;
   snowDepthM: number;
   snowProfile: SnowProfile;
-  region: RegionCoefficients;
+  regionCoefficients: RegionCoefficients;
   primaryPath: AvalanchePath;
 }
 
@@ -71,6 +88,7 @@ export async function runOpenFoamLocal(
   }
 
   const payload: OpenFoamJobPayload = {
+    schemaVersion: 1,
     dem: {
       origin: dem.origin,
       cellSize: dem.cellSize,
@@ -82,7 +100,7 @@ export async function runOpenFoamLocal(
     startingZone,
     snowDepthM,
     snowProfile,
-    region,
+    regionCoefficients: region,
     primaryPath,
   };
 
@@ -100,13 +118,34 @@ export async function runOpenFoamLocal(
     if (signal?.aborted) {
       throw new Error("openfoam job aborted");
     }
-    const status = await fetchJson<JobStatusResponse>(`${baseUrl}/jobs/${create.jobId}`, { signal });
+    const status = await fetchJson<JobStatusResponse>(`${baseUrl}/jobs/${create.id}`, { signal });
     if (status.status === "failed") {
       throw new Error(status.error ?? "openfoam job failed");
     }
     if (status.status === "complete") {
-      const result = await fetchJson<JobResultResponse>(`${baseUrl}/jobs/${create.jobId}/results`, { signal });
-      return result.flowPy;
+      const raw = await fetchJson<ServerResult>(`${baseUrl}/jobs/${create.id}/results`, { signal });
+      const n = raw.rows * raw.cols;
+      return {
+        origin: raw.origin,
+        cellSize: raw.cellSize,
+        cols: raw.cols,
+        rows: raw.rows,
+        deposition: new Float32Array(raw.deposition),
+        zMaxDelta: new Float32Array(n),
+        rMax: new Float32Array(n),
+        cellCount: new Uint16Array(n),
+        vMaxGrid: new Float32Array(raw.vMaxGrid),
+        pMaxGrid: new Float32Array(raw.pMaxGrid),
+        solverInfo: {
+          type: 'openfoam',
+          simulationTime: raw.metadata.simulationTime,
+          timeSteps: raw.metadata.steps,
+          massConservation: raw.metadata.massConservation,
+          massInitial: raw.metadata.massInitial,
+          massEntrained: raw.metadata.massEntrained,
+          massDeposited: raw.metadata.massDeposited,
+        },
+      };
     }
     await new Promise((r) => setTimeout(r, pollMs));
   }

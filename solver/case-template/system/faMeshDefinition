@@ -17,6 +17,6 @@ boundary
     {
         type            patch;
         ownerPolyPatch  terrain;
-        neighbourPolyPatch  empty;
+        neighbourPolyPatch  sides;
     }
 }
