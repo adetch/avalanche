@@ -1,0 +1,12 @@
+# Solver runtime output
+0/
+[1-9]*/
+processor*/
+postProcessing/
+log.*
+*.log
+dynamicCode/
+
+# Generated mesh
+constant/polyMesh/
+constant/faMesh/
