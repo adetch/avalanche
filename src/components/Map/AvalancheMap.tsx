@@ -16,7 +16,7 @@ import * as turf from "@turf/turf";
 import { computeAvalanchePath } from "@/lib/avalanche/compute";
 import { detectRegion } from "@/lib/avalanche/region-detect";
 import { logStartingZone, logAvalanchePath, logComputationFailed } from "@/lib/logger";
-import { runOpenFoamLocal } from "@/lib/solver/openfoam-local";
+import { runOpenFoamLocal, cancelOpenFoamJob } from "@/lib/solver/openfoam-local";
 
 const MAPTILER_KEY = process.env.NEXT_PUBLIC_MAPTILER_KEY;
 
@@ -38,7 +38,10 @@ export default function AvalancheMap() {
   const localSolverUrl = useAvalancheStore((s) => s.localSolverUrl);
   const setExternalSolverStatus = useAvalancheStore((s) => s.setExternalSolverStatus);
   const setExternalSolverError = useAvalancheStore((s) => s.setExternalSolverError);
+  const setExternalJobId = useAvalancheStore((s) => s.setExternalJobId);
+  const setCancelExternalFn = useAvalancheStore((s) => s.setCancelExternalFn);
   const requestIdRef = useRef(0);
+  const abortRef = useRef<AbortController | null>(null);
 
   const onMapLoad = useCallback(() => {
     const map = mapRef.current?.getMap();
@@ -115,7 +118,23 @@ export default function AvalancheMap() {
           if (solverMode === "openfoam-local") {
             const requestId = ++requestIdRef.current;
             const snowDepthM = snowDepth / 100;
+            // Abort any previous OpenFOAM job (client + server)
+            const prevJobId = useAvalancheStore.getState().externalJobId;
+            if (prevJobId) {
+              cancelOpenFoamJob(localSolverUrl, prevJobId);
+            }
+            abortRef.current?.abort();
+            const controller = new AbortController();
+            abortRef.current = controller;
+            const jobIdHolder = { current: "" };
             setExternalSolverStatus("running");
+            setExternalJobId(null);
+            setCancelExternalFn(() => {
+              controller.abort();
+              if (jobIdHolder.current) {
+                cancelOpenFoamJob(localSolverUrl, jobIdHolder.current);
+              }
+            });
             runOpenFoamLocal(
               map,
               startingZonePolygon,
@@ -123,7 +142,12 @@ export default function AvalancheMap() {
               snowDepthM,
               snowProfile,
               activeRegion,
-              localSolverUrl
+              localSolverUrl,
+              controller.signal,
+              (jobId) => {
+                jobIdHolder.current = jobId;
+                setExternalJobId(jobId);
+              }
             ).then((flowPy) => {
               if (requestIdRef.current !== requestId) return;
               const current = useAvalancheStore.getState().result;
@@ -131,11 +155,14 @@ export default function AvalancheMap() {
                 setResult({ ...current, flowPy });
               }
               setExternalSolverStatus("complete");
+              setCancelExternalFn(null);
             }).catch((err) => {
               if (requestIdRef.current !== requestId) return;
+              if (controller.signal.aborted) return;
               setExternalSolverStatus("failed");
-              const msg = err instanceof Error ? err.message : "openfoam solver failed";
-              setExternalSolverError(msg);
+              const msg = err instanceof Error ? err.message : "OpenFOAM solver failed";
+              setExternalSolverError(classifyError(msg));
+              setCancelExternalFn(null);
             });
           }
         } else {
@@ -152,8 +179,15 @@ export default function AvalancheMap() {
       }
     }, 500);
 
-    return () => clearTimeout(timer);
-  }, [startingZonePolygon, snowDepth, snowProfile, region, solverMode, localSolverUrl, setResult, setComputing, setError, setSlopeAngle, setRegion, setExternalSolverStatus, setExternalSolverError]);
+    return () => {
+      clearTimeout(timer);
+      const prevJobId = useAvalancheStore.getState().externalJobId;
+      if (prevJobId) {
+        cancelOpenFoamJob(localSolverUrl, prevJobId);
+      }
+      abortRef.current?.abort();
+    };
+  }, [startingZonePolygon, snowDepth, snowProfile, region, solverMode, localSolverUrl, setResult, setComputing, setError, setSlopeAngle, setRegion, setExternalSolverStatus, setExternalSolverError, setExternalJobId, setCancelExternalFn]);
 
   if (!MAPTILER_KEY) {
     return (
@@ -192,4 +226,20 @@ export default function AvalancheMap() {
       <PathOverlay />
     </Map>
   );
+}
+
+function classifyError(msg: string): string {
+  if (/cannot connect|fetch failed|network|ECONNREFUSED/i.test(msg)) {
+    return "Cannot connect to solver service. Is Docker running and the solverd process started?";
+  }
+  if (/timed? ?out/i.test(msg)) {
+    return "Solver timed out. The terrain may be too large or the solver service is unresponsive.";
+  }
+  if (/image.*not found|no such image|manifest unknown/i.test(msg)) {
+    return "Solver container image not found. Run the container build first (see solver/README.md).";
+  }
+  if (/already running/i.test(msg)) {
+    return "A solver job is already running. Wait for it to complete or cancel it.";
+  }
+  return msg;
 }

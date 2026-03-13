@@ -35,12 +35,35 @@ interface OpenFoamJobPayload {
 }
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init);
+  let res: Response;
+  try {
+    res = await fetch(url, init);
+  } catch (err) {
+    if (err instanceof TypeError) {
+      throw new Error(
+        "Cannot connect to solver service. Is Docker running and the solverd process started?"
+      );
+    }
+    throw err;
+  }
   if (!res.ok) {
     const text = await res.text();
+    if (res.status === 409) {
+      let parsed: { error?: string } | undefined;
+      try { parsed = JSON.parse(text); } catch { /* ignore */ }
+      throw new Error(parsed?.error ?? "A solver job is already running");
+    }
     throw new Error(`${res.status} ${res.statusText}: ${text}`);
   }
   return res.json() as Promise<T>;
+}
+
+export async function cancelOpenFoamJob(baseUrl: string, jobId: string): Promise<void> {
+  try {
+    await fetch(`${baseUrl}/jobs/${jobId}`, { method: "DELETE" });
+  } catch {
+    // Best-effort cancellation — ignore network errors
+  }
 }
 
 export async function runOpenFoamLocal(
@@ -51,7 +74,8 @@ export async function runOpenFoamLocal(
   snowProfile: SnowProfile,
   region: RegionCoefficients,
   baseUrl: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  onJobCreated?: (jobId: string) => void
 ): Promise<FlowPyGridResult> {
   const downslopeExtent = Math.max(primaryPath.runoutPoint.distanceFromCrown * 1.5, 2000);
   const dem = buildVirtualDEM(
@@ -93,6 +117,8 @@ export async function runOpenFoamLocal(
     signal,
   });
 
+  onJobCreated?.(create.jobId);
+
   const timeoutMs = 20 * 60 * 1000;
   const pollMs = 2000;
   const start = Date.now();
@@ -111,5 +137,5 @@ export async function runOpenFoamLocal(
     await new Promise((r) => setTimeout(r, pollMs));
   }
 
-  throw new Error("openfoam job timed out");
+  throw new Error("Solver timed out. The terrain may be too large or the solver service is unresponsive.");
 }

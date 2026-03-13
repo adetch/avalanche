@@ -19,6 +19,8 @@ interface AvalancheStore {
   localSolverUrl: string;
   externalSolverStatus: "idle" | "running" | "failed" | "complete";
   externalSolverError: string | null;
+  externalJobId: string | null;
+  _cancelExternalFn: (() => void) | null;
 
   // Drawing
   drawingMode: boolean;
@@ -43,6 +45,9 @@ interface AvalancheStore {
   setLocalSolverUrl: (url: string) => void;
   setExternalSolverStatus: (status: "idle" | "running" | "failed" | "complete") => void;
   setExternalSolverError: (error: string | null) => void;
+  setExternalJobId: (id: string | null) => void;
+  setCancelExternalFn: (fn: (() => void) | null) => void;
+  cancelExternalJob: () => void;
   setMapReady: (ready: boolean) => void;
   flyTo: (target: FlyToTarget) => void;
   clearFlyTo: () => void;
@@ -64,6 +69,8 @@ export const useAvalancheStore = create<AvalancheStore>((set, get) => ({
   localSolverUrl: "http://127.0.0.1:8090",
   externalSolverStatus: "idle",
   externalSolverError: null,
+  externalJobId: null,
+  _cancelExternalFn: null,
 
   drawingMode: false,
   drawingVertices: [],
@@ -84,6 +91,13 @@ export const useAvalancheStore = create<AvalancheStore>((set, get) => ({
   setLocalSolverUrl: (url) => set({ localSolverUrl: url }),
   setExternalSolverStatus: (status) => set({ externalSolverStatus: status }),
   setExternalSolverError: (error) => set({ externalSolverError: error }),
+  setExternalJobId: (id) => set({ externalJobId: id }),
+  setCancelExternalFn: (fn) => set({ _cancelExternalFn: fn }),
+  cancelExternalJob: () => {
+    const { _cancelExternalFn } = get();
+    if (_cancelExternalFn) _cancelExternalFn();
+    set({ externalSolverStatus: "idle", externalSolverError: null, externalJobId: null, _cancelExternalFn: null });
+  },
   setMapReady: (ready) => set({ mapReady: ready }),
 
   flyTo: (target) => set({ flyToTarget: target }),
