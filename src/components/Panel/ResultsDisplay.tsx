@@ -186,29 +186,42 @@ export default function ResultsDisplay() {
         </div>
       )}
 
+      {/* OpenFOAM solver status (shown independently of flowPy results) */}
+      {solverMode === "openfoam-local" && externalSolverStatus === "running" && (
+        <div className="rounded-md bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-700">
+          <div className="flex items-center gap-2">
+            <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            </svg>
+            OpenFOAM solver running...
+          </div>
+        </div>
+      )}
+      {solverMode === "openfoam-local" && externalSolverStatus === "failed" && (
+        <div className="rounded-md bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-600">
+          <div className="font-medium">OpenFOAM solver failed</div>
+          {externalSolverError && (
+            <div className="mt-1 text-xs">{externalSolverError}</div>
+          )}
+        </div>
+      )}
+      {solverMode === "openfoam-local" && externalSolverStatus === "complete" && !result.flowPy && (
+        <div className="rounded-md bg-green-50 border border-green-200 px-4 py-3 text-sm text-green-700">
+          OpenFOAM solver complete
+        </div>
+      )}
+
       {/* Flow-Py 2D simulation */}
       {result.flowPy && (
         <div className="rounded-md bg-zinc-50 px-3 py-2">
           <div className="text-xs font-medium text-zinc-500 mb-1">
             2D Flow Simulation
+            {solverMode === "openfoam-local" && (
+              <span className="ml-1 text-green-600">(OpenFOAM)</span>
+            )}
           </div>
           <div className="space-y-0.5 text-xs font-mono">
-            {solverMode === "openfoam-local" && (
-              <div className="flex justify-between text-zinc-700">
-                <span>High-fidelity</span>
-                <span>
-                  {externalSolverStatus === "running" && "running"}
-                  {externalSolverStatus === "complete" && "complete"}
-                  {externalSolverStatus === "failed" && "failed"}
-                  {externalSolverStatus === "idle" && "idle"}
-                </span>
-              </div>
-            )}
-            {solverMode === "openfoam-local" && externalSolverError && (
-              <div className="text-xs text-red-600">
-                {externalSolverError}
-              </div>
-            )}
             <div className="flex justify-between text-zinc-700">
               <span>Grid</span>
               <span>{result.flowPy.cols}×{result.flowPy.rows} ({result.flowPy.cellSize}m)</span>
