@@ -48,17 +48,32 @@ run_step() {
 }
 
 # ---------- 1. Mesh generation ----------
-# Use slopeMesh if slopeMeshDict exists, otherwise blockMesh
 if [ -f "constant/slopeMeshDict" ]; then
     run_step "slopeMesh" slopeMesh
 else
     run_step "blockMesh" blockMesh
 fi
 
+# ---------- 1b. Terrain displacement ----------
+# If pre-computed displaced points exist, swap them in to follow DEM elevation
+if [ -f "displaced/points" ]; then
+    echo ""
+    echo ">>> [displace_terrain] Replacing mesh points with terrain-following coordinates"
+    cp displaced/points constant/polyMesh/points
+    echo "<<< [displace_terrain] done"
+fi
+
 # ---------- 2. Finite-area mesh ----------
 run_step "makeFaMesh" makeFaMesh
 
-# ---------- 3. Restore initial conditions ----------
+# ---------- 3. Clean stale time directories & restore initial conditions ----------
+# Remove any leftover time directories (> 0) so startFrom latestTime works correctly
+echo ""
+echo ">>> [cleanCase] Removing stale time directories"
+find . -maxdepth 1 -regex './[1-9][0-9.]*' -type d -exec rm -rf {} +
+rm -rf processor*
+echo "<<< [cleanCase] done"
+
 if [ -d "0.orig" ]; then
     echo ""
     echo ">>> [restore0Dir] Copying 0.orig -> 0"

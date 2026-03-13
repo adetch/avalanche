@@ -6,17 +6,14 @@ FoamFile
     object      fvSchemes;
 }
 
-// Finite-volume schemes — minimal since the shallow-water equations
-// are solved on the finite-area mesh, not the volume mesh.
-
 ddtSchemes
 {
-    default         Euler;
+    default         none;
 }
 
 gradSchemes
 {
-    default         Gauss linear;
+    default         none;
 }
 
 divSchemes
@@ -26,15 +23,19 @@ divSchemes
 
 laplacianSchemes
 {
-    default         Gauss linear corrected;
+    default         none;
 }
 
 interpolationSchemes
 {
-    default         linear;
+    default         none;
 }
 
 snGradSchemes
 {
-    default         corrected;
+    default         none;
+}
+
+fluxRequired
+{
 }

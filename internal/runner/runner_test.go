@@ -345,13 +345,14 @@ func TestNProcsOne(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// The bash -c command should NOT contain mpirun
-	bashCmd := capturedDockerArgs[len(capturedDockerArgs)-1]
-	if strings.Contains(bashCmd, "mpirun") {
-		t.Errorf("NProcs=1 should not use mpirun, got: %s", bashCmd)
+	// Entrypoint handles the solver; Docker args should pass NP=1 via -e.
+	allArgs := strings.Join(capturedDockerArgs, " ")
+	if !strings.Contains(allArgs, "NP=1") {
+		t.Errorf("NProcs=1 should set NP=1 env, got: %s", allArgs)
 	}
-	if !strings.Contains(bashCmd, "faSavageHutterFoam") {
-		t.Errorf("command should contain solver binary, got: %s", bashCmd)
+	// Should NOT contain bash -c (entrypoint handles everything)
+	if strings.Contains(allArgs, "bash -c") {
+		t.Errorf("should use entrypoint, not bash -c, got: %s", allArgs)
 	}
 }
 
@@ -382,18 +383,14 @@ func TestNProcsMulti(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	bashCmd := capturedDockerArgs[len(capturedDockerArgs)-1]
-	if !strings.Contains(bashCmd, "mpirun -np 4") {
-		t.Errorf("NProcs=4 should use mpirun, got: %s", bashCmd)
+	// Entrypoint handles MPI; Docker args should pass NP=4 via -e.
+	allArgs := strings.Join(capturedDockerArgs, " ")
+	if !strings.Contains(allArgs, "NP=4") {
+		t.Errorf("NProcs=4 should set NP=4 env, got: %s", allArgs)
 	}
-	if !strings.Contains(bashCmd, "-parallel") {
-		t.Errorf("NProcs>1 should use -parallel flag, got: %s", bashCmd)
-	}
-	if !strings.Contains(bashCmd, "decomposePar") {
-		t.Errorf("NProcs>1 should run decomposePar, got: %s", bashCmd)
-	}
-	if !strings.Contains(bashCmd, "reconstructPar") {
-		t.Errorf("NProcs>1 should run reconstructPar, got: %s", bashCmd)
+	// Should NOT contain bash -c (entrypoint handles everything)
+	if strings.Contains(allArgs, "bash -c") {
+		t.Errorf("should use entrypoint, not bash -c, got: %s", allArgs)
 	}
 }
 
@@ -401,8 +398,8 @@ func TestConfigDefaults(t *testing.T) {
 	cfg := Config{}
 	applyDefaults(&cfg)
 
-	if cfg.Image != "opencfd/openfoam-dev:2312" {
-		t.Errorf("Image = %q, want opencfd/openfoam-dev:2312", cfg.Image)
+	if cfg.Image != "avalanche-solver" {
+		t.Errorf("Image = %q, want avalanche-solver", cfg.Image)
 	}
 	if cfg.NProcs != 1 {
 		t.Errorf("NProcs = %d, want 1", cfg.NProcs)

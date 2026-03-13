@@ -26,7 +26,7 @@ func main() {
 
 	cfg := runner.Config{
 		ProjectRoot: resolveProjectRoot(),
-		Image:       envOrDefault("SOLVERD_IMAGE", "opencfd/openfoam-dev:2312"),
+		Image:       envOrDefault("SOLVERD_IMAGE", "avalanche-solver"),
 		NProcs:      envIntOrDefault("SOLVERD_NPROCS", 1),
 		TimeoutSec:  envIntOrDefault("SOLVERD_TIMEOUT", 300),
 	}

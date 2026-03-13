@@ -239,8 +239,13 @@ export default function ResultsDisplay() {
               <span>Cells reached</span>
               <span>{(() => {
                 let count = 0;
-                for (let i = 0; i < result.flowPy.cellCount.length; i++) {
-                  if (result.flowPy.cellCount[i] > 0) count++;
+                const fp = result.flowPy;
+                // For OpenFOAM/voellmy-2d: count non-zero deposition cells
+                // For flow-py: count non-zero cellCount entries
+                const arr = (fp.solverInfo?.type === 'openfoam' || fp.solverInfo?.type === 'voellmy-2d')
+                  ? fp.deposition : fp.cellCount;
+                for (let i = 0; i < arr.length; i++) {
+                  if (arr[i] > 0) count++;
                 }
                 return count.toLocaleString();
               })()}</span>
@@ -249,10 +254,13 @@ export default function ResultsDisplay() {
               <span>Affected area</span>
               <span>{(() => {
                 let count = 0;
-                for (let i = 0; i < result.flowPy.cellCount.length; i++) {
-                  if (result.flowPy.cellCount[i] > 0) count++;
+                const fp = result.flowPy;
+                const arr = (fp.solverInfo?.type === 'openfoam' || fp.solverInfo?.type === 'voellmy-2d')
+                  ? fp.deposition : fp.cellCount;
+                for (let i = 0; i < arr.length; i++) {
+                  if (arr[i] > 0) count++;
                 }
-                const areaM2 = count * result.flowPy.cellSize * result.flowPy.cellSize;
+                const areaM2 = count * fp.cellSize * fp.cellSize;
                 return areaM2 < 10000
                   ? `${formatNumber(areaM2)} m²`
                   : `${(areaM2 / 10000).toFixed(1)} ha`;
@@ -262,15 +270,21 @@ export default function ResultsDisplay() {
               <>
                 <div className="flex justify-between text-zinc-700">
                   <span>Mass in</span>
-                  <span>{formatNumber((result.flowPy.solverInfo.massInitial ?? 0) + (result.flowPy.solverInfo.massEntrained ?? 0))} m</span>
+                  <span>{formatNumber((result.flowPy.solverInfo.massInitial ?? 0) + (result.flowPy.solverInfo.massEntrained ?? 0))} m (Σh)</span>
                 </div>
                 <div className="flex justify-between text-zinc-700">
                   <span>Mass deposited</span>
-                  <span>{formatNumber(result.flowPy.solverInfo.massDeposited ?? 0)} m</span>
+                  <span>{formatNumber(result.flowPy.solverInfo.massDeposited ?? 0)} m (Σh)</span>
                 </div>
                 <div className="flex justify-between text-zinc-700">
                   <span>Mass balance</span>
-                  <span>{(((result.flowPy.solverInfo.massBalanceError ?? 0) * 100)).toFixed(1)}%</span>
+                  <span>{(() => {
+                    const info = result.flowPy.solverInfo;
+                    if (info.massConservation != null && info.massConservation > 0) {
+                      return `${(info.massConservation * 100).toFixed(1)}%`;
+                    }
+                    return `${(((info.massBalanceError ?? 0) * 100)).toFixed(1)}%`;
+                  })()}</span>
                 </div>
               </>
             )}

@@ -315,23 +315,16 @@ func TestConvertOutputMissingH(t *testing.T) {
 	grid := GridSpec{
 		Origin:   [2]float64{-116.0, 51.0},
 		CellSize: 15,
-		Cols:     3,
+		Cols:     6,
 		Rows:     1,
 	}
 
-	// No h file, only Us
+	// No h file, only Us — converter should still fail plausibility (no deposition)
 	caseDir := setupTestCase(t, grid, "", "", sampleVectorUs)
 
-	result, err := ConvertOutput(caseDir, 250.0, 1.0)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Deposition should be all zeros (graceful handling)
-	for i, d := range result.Deposition {
-		if d != 0 {
-			t.Errorf("deposition[%d]: expected 0, got %f", i, d)
-		}
+	_, err := ConvertOutput(caseDir, 250.0, 1.0)
+	if err == nil {
+		t.Error("expected plausibility error for missing h (zero deposition)")
 	}
 }
 
@@ -486,6 +479,89 @@ func TestWriteResultJSONRoundTrip(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Plausibility validation tests
+// ---------------------------------------------------------------------------
+
+func TestValidatePlausibility_Healthy(t *testing.T) {
+	dep := []float32{0.0, 0.5, 1.2, 0.3, 0.0, 0.0}
+	vel := []float32{0.0, 5.0, 12.0, 8.0, 0.0, 0.0}
+	meta := ResultMeta{
+		MassInitial:      6.0,
+		MassDeposited:    2.0,
+		MassConservation: 2.0 / 6.0,
+	}
+	if err := validatePlausibility(dep, vel, meta); err != nil {
+		t.Errorf("expected no error for healthy result, got: %v", err)
+	}
+}
+
+func TestValidatePlausibility_NoFlow(t *testing.T) {
+	dep := make([]float32, 6) // all zeros
+	vel := make([]float32, 6)
+	meta := ResultMeta{MassInitial: 6.0, MassDeposited: 0.0, MassConservation: 0.0}
+	err := validatePlausibility(dep, vel, meta)
+	if err == nil {
+		t.Error("expected error for zero deposition (no flow)")
+	}
+}
+
+func TestValidatePlausibility_NegativeDepth(t *testing.T) {
+	dep := []float32{0.5, -0.1, 0.0}
+	vel := []float32{5.0, 3.0, 0.0}
+	meta := ResultMeta{MassInitial: 1.0, MassDeposited: 0.4, MassConservation: 0.4}
+	err := validatePlausibility(dep, vel, meta)
+	if err == nil {
+		t.Error("expected error for negative deposition")
+	}
+}
+
+func TestValidatePlausibility_ExtremeDepth(t *testing.T) {
+	dep := []float32{0.5, 150.0, 0.0}
+	vel := []float32{5.0, 3.0, 0.0}
+	meta := ResultMeta{MassInitial: 1.0, MassDeposited: 150.5, MassConservation: 150.5}
+	err := validatePlausibility(dep, vel, meta)
+	if err == nil {
+		t.Error("expected error for 150m deposition depth")
+	}
+}
+
+func TestValidatePlausibility_ExtremeVelocity(t *testing.T) {
+	dep := []float32{0.5, 1.0, 0.0}
+	vel := []float32{5.0, 250.0, 0.0}
+	meta := ResultMeta{MassInitial: 1.0, MassDeposited: 1.5, MassConservation: 1.5}
+	err := validatePlausibility(dep, vel, meta)
+	if err == nil {
+		t.Error("expected error for 250 m/s velocity")
+	}
+}
+
+func TestValidatePlausibility_MassExplosion(t *testing.T) {
+	dep := []float32{0.5, 1.0, 0.3}
+	vel := []float32{5.0, 3.0, 1.0}
+	meta := ResultMeta{MassInitial: 0.2, MassDeposited: 1.8, MassConservation: 9.0}
+	err := validatePlausibility(dep, vel, meta)
+	if err == nil {
+		t.Error("expected error for 9x mass growth")
+	}
+}
+
+func TestConvertOutput_FieldSizeMismatch(t *testing.T) {
+	// Simulate the bug: grid says 4x3=12 but field has 6 values (wrong mesh)
+	grid := GridSpec{
+		Origin:   [2]float64{0, 0},
+		CellSize: 15,
+		Cols:     4,
+		Rows:     3,
+	}
+	caseDir := setupTestCase(t, grid, "", sampleScalarH, sampleVectorUs)
+
+	_, err := ConvertOutput(caseDir, 250.0, 1.0)
+	if err == nil {
+		t.Error("expected error when field size (6) doesn't match grid (12)")
+	}
+}
+
 func TestExpandToFloat32Uniform(t *testing.T) {
 	result := expandToFloat32([]float64{3.14}, 5)
 	if len(result) != 5 {
@@ -570,7 +646,7 @@ func TestPressureCalculation(t *testing.T) {
 
 	grid := GridSpec{Origin: [2]float64{0, 0}, CellSize: 15, Cols: 1, Rows: 1}
 
-	// Create a case with known velocity
+	// Create a case with known velocity and deposition
 	dir := t.TempDir()
 	inputData, _ := json.Marshal(InputJSON{DEM: struct {
 		Origin   [2]float64 `json:"origin"`
@@ -583,6 +659,22 @@ func TestPressureCalculation(t *testing.T) {
 	timeDir := filepath.Join(dir, "10")
 	os.MkdirAll(timeDir, 0755)
 
+	hContent := `FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       areaScalarField;
+    object      h;
+}
+dimensions      [0 1 0 0 0 0 0];
+
+internalField   nonuniform List<scalar>
+1
+(
+0.5
+)
+;
+`
 	usContent := `FoamFile
 {
     version     2.0;
@@ -599,6 +691,7 @@ internalField   nonuniform List<vector>
 )
 ;
 `
+	os.WriteFile(filepath.Join(timeDir, "h"), []byte(hContent), 0644)
 	os.WriteFile(filepath.Join(timeDir, "Us"), []byte(usContent), 0644)
 
 	result, err := ConvertOutput(dir, density, 1.0)
